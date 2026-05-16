@@ -1,0 +1,13 @@
+{
+  "client_id": "menshikov_llc",
+  "name": "MENSHIKOV LLC",
+  "aliases": ["menshikov", "my truck", "my_truck"],
+  "base_jurisdiction": "CA",
+  "portal": "cdtfa",
+  "profile": "menshikov_llc",
+  "source_folder": "../MyTruck",
+  "profile_path": "profile.json",
+  "history_path": "history.json",
+  "active": false,
+  "notes": "Retired reference carrier; not an active filing customer. 16 quarters of CDTFA filings retained as a real end-to-end IFTA Quarterly Return example."
+}

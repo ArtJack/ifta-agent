@@ -1,0 +1,13 @@
+{
+  "client_id": "test_logistics",
+  "name": "TEST LOGISTICS LLC",
+  "aliases": ["test logistics", "test logistics llc"],
+  "base_jurisdiction": "KY",
+  "portal": "generic",
+  "profile": "none",
+  "source_folder": null,
+  "profile_path": null,
+  "history_path": null,
+  "active": false,
+  "notes": "Fictional test carrier. Do not apply DM Express or MENSHIKOV history."
+}

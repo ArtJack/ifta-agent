@@ -1,0 +1,173 @@
+{
+  "operator": "DM EXPRESS INC",
+  "fleet_evolution": {
+    "trucks_ever_seen": [
+      "07",
+      "2013",
+      "2015",
+      "2016",
+      "2017",
+      "2019",
+      "55"
+    ],
+    "appearances_per_truck": {
+      "2013": 5,
+      "2016": 3,
+      "2017": 5,
+      "2019": 5,
+      "2015": 3,
+      "55": 1,
+      "07": 1
+    },
+    "note": "Truck IDs appear to be year-of-truck (2013, 2015, 2016, 2017, 2019). New units '55' and '07' appeared starting Q1 2026 \u2014 fleet expanded."
+  },
+  "fuel_vendors": {
+    "seen_in_history": [
+      "EDS",
+      "Pilot",
+      "Relay",
+      "TA"
+    ],
+    "note": "Q2 2025 used TA + Pilot + EDS. Q3 2025 dropped TA, added Relay. Sheet header has 'Realy' typo in original."
+  },
+  "fleet_mpg_history": {
+    "values_by_quarter": {
+      "Q1 2025": 6.4495,
+      "Q2 2025": 6.8346,
+      "Q3 2025": 6.9422,
+      "Q4 2025": 6.9311,
+      "Q1 2026": 6.6754
+    },
+    "min": 6.45,
+    "max": 6.94,
+    "mean": 6.77
+  },
+  "miles_per_quarter": {
+    "values": {
+      "Q1 2025": 110525.0,
+      "Q2 2025": 132550.0,
+      "Q3 2025": 126674.0,
+      "Q4 2025": 122583.0,
+      "Q1 2026": 124877.0
+    },
+    "min": 110525,
+    "max": 132550,
+    "mean": 123442
+  },
+  "routes": {
+    "always_visited": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "MN",
+      "MO",
+      "MS",
+      "MT",
+      "NE",
+      "NM",
+      "NV",
+      "OK",
+      "OR",
+      "TN",
+      "TX",
+      "UT",
+      "WA",
+      "WI",
+      "WY"
+    ],
+    "frequently_visited": [
+      "ND",
+      "OH",
+      "SC",
+      "WV"
+    ],
+    "occasional": [],
+    "one_off": [
+      "FL",
+      "LA",
+      "NC",
+      "PA",
+      "SD",
+      "VA"
+    ],
+    "top_5_by_total_miles": [
+      [
+        "CA",
+        194293.0
+      ],
+      [
+        "AZ",
+        95660.0
+      ],
+      [
+        "NV",
+        92605.0
+      ],
+      [
+        "TX",
+        32309.0
+      ],
+      [
+        "NM",
+        30139.0
+      ]
+    ]
+  },
+  "anomalies_and_patterns": [
+    "FLEET CHANGED Q1 2026: added 3 trucks (2016, '55', '07'). MPG may shift as new units enter.",
+    "FUEL VENDOR SWITCH Q3 2025: TA replaced with Relay. Verify per-vendor receipts are kept for audit.",
+    "Sheet headers in Q1/Q2 2026 say 'IFTA Q4 2025' \u2014 copy-paste typo by David in his template. Cosmetic.",
+    "California is the largest state by miles in every quarter (largest rate \u00d7 largest miles). Largest tax contributor.",
+    "Heavy reliance on AZ/NV/NM/WY for fuel purchases \u2014 these tend to produce CREDIT lines on the return.",
+    "Surcharge states KY and VA appear sporadically \u2014 make sure surcharge lines are added when miles are present."
+  ],
+  "filing_workflow": {
+    "raw_inputs_typically_sent": [
+      "Excel workbook with per-truck-per-state mileage (David's IFTA 2025 ACTIVED.xlsx template)",
+      "Fuel-card transaction PDF (Comdata-style 'IFTA Report' with per-purchase detail)",
+      "Per-state aggregated fuel CSV (Truck #, merchant_state, tax_paid, fuel_volume)"
+    ],
+    "deliver_back": [
+      "Review Excel (per-truck blocks + Jurisdiction Summary)",
+      "Portal-ready CSV (IFTA standard format)",
+      "AI agent review notes (markdown)"
+    ],
+    "base_state_portal": "Kentucky DOR \u2014 David submits via KY's e-file system."
+  },
+  "client_relationship": "PRIMARY CLIENT \u2014 the user files David's IFTA returns on his behalf.",
+  "base_state": {
+    "jurisdiction": "Kentucky",
+    "agency": "Kentucky Department of Revenue (KY DOR)",
+    "portal_hint": "Files at https://drive.ky.gov/motor-carriers/ (Kentucky Transportation Cabinet) or via KY DOR e-file. Confirm the exact URL David uses.",
+    "notes_for_kentucky_filers": [
+      "KY is David's base state. His IFTA license + decals issued by KY.",
+      "He has KY miles EVERY quarter (KY in 'always_visited' list) \u2014 Kentucky Surcharge line MUST appear on every return.",
+      "If any of his trucks are >59,999 lbs declared gross weight, KYU (Kentucky Weight Distance Tax) is filed SEPARATELY from IFTA, on its own quarterly schedule.",
+      "Penalty for late filing: greater of $50 or 10% of net tax due (IFTA standard)."
+    ]
+  },
+  "per_quarter_filing_checklist": [
+    "Confirm KY surcharge line is present (David has KY miles every quarter).",
+    "Verify Oregon shows $0 IFTA rate; Oregon WMT filed separately with ODOT.",
+    "Check VA surcharge if he has Virginia miles this quarter.",
+    "Verify all fleet trucks are on his IFTA decal list \u2014 fleet expanded in Q1 2026 (added 55, 07).",
+    "Cross-check fuel-vendor totals (TA/Pilot/EDS or Pilot/Relay/EDS depending on quarter) match the fuel-card PDF.",
+    "Confirm fleet MPG is in 6.4\u20137.0 historical band \u2014 anything below 5.5 or above 7.5 needs investigation.",
+    "Total miles should be 110K\u2013135K for a full quarter \u2014 outliers indicate possible data gaps."
+  ],
+  "comparison_thresholds": {
+    "fleet_mpg": {"min": 6.45, "max": 6.94, "tolerance": 0.5},
+    "fleet_miles": {"min": 110525, "max": 132550, "low_threshold": 100000},
+    "total_tax_due": {"min": 0, "max": 10000, "tolerance": 500}
+  },
+  "narrative_for_agent": "Active multi-truck carrier, Kentucky base state, files via KY DOR. Fleet grew from 4 trucks (2013/2016/2017/2019) in Q1 2025 to 7 trucks in Q1 2026 (added 2015, 2016 returned, '55', '07'). Fuel vendors: TA+Pilot+EDS through Q2 2025, then Pilot+Relay+EDS from Q3 2025 onward. Heavy CA/AZ/NV/WY operator \u2014 California is the largest tax contributor every quarter. Historical MPG 6.45\u20136.94 (mean 6.77), miles 110K\u2013133K per quarter. KY surcharge line applies EVERY quarter \u2014 David always has KY miles. KYU (Kentucky Weight Distance Tax) is a SEPARATE filing if any truck has declared gross weight > 59,999 lbs."
+}
