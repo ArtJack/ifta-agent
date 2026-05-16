@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ifta-pipeline"
+version = "0.2.0"
+description = "Quarterly IFTA filing pipeline with an AI review agent"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Eugene Menshikov" }]
+license = { text = "Proprietary" }
+dependencies = [
+    "anthropic>=0.92",
+    "beautifulsoup4>=4.12",
+    "click>=8.1",
+    "lxml>=5.0",
+    "openpyxl>=3.1",
+    "pandas>=2.0",
+    "pdfplumber>=0.11",
+    "python-dotenv>=1.0",
+    "requests>=2.30",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+ifta = "ifta.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort (import order)
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",   # line too long — formatter handles it
+    "B008",   # default arg call — common in Click
+    "RUF001", # ambiguous unicode in strings — we use en-dash etc. in user-facing prose
+    "RUF002", # ambiguous unicode in docstrings — same
+    "RUF003", # ambiguous unicode in comments — same
+    "RUF046", # int(round(x)) is explicit and intentional in report output
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_return_any = false
+ignore_missing_imports = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-q", "--tb=short"]
