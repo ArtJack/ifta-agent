@@ -1,0 +1,13 @@
+{
+  "client_id": "dm_express",
+  "name": "DM EXPRESS INC",
+  "aliases": ["david", "dm express", "dm express inc", "dm_express_inc"],
+  "base_jurisdiction": "KY",
+  "portal": "ky",
+  "profile": "dm_express",
+  "source_folder": "../David",
+  "profile_path": "profile.json",
+  "history_path": "history.json",
+  "active": true,
+  "notes": "Primary active client. User files IFTA returns on his behalf. Also referred to as David."
+}

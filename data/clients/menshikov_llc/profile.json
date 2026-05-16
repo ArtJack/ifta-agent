@@ -1,0 +1,144 @@
+{
+  "operator": "MENSHIKOV LLC (RETIRED)",
+  "account_number": "238-929600",
+  "base_state": "California",
+  "portal": "CDTFA online services (https://onlineservices.cdtfa.ca.gov/)",
+  "support_phone": "1-800-400-7115",
+  "fleet": {
+    "trucks": 1,
+    "truck_id": "800",
+    "fuel_type": "Diesel"
+  },
+  "history_window": {
+    "first_quarter": "Q4 2021",
+    "last_quarter": "Q4 2025",
+    "filings_parsed": 16,
+    "missing": "Q3 2024 (scanned image PDF \u2014 no extractable text)"
+  },
+  "fleet_mpg_stats": {
+    "min": 5.93,
+    "max": 7.52,
+    "mean": 6.75,
+    "median": 6.7,
+    "stdev": 0.5
+  },
+  "quarterly_miles_stats": {
+    "min": 6670,
+    "max": 33556,
+    "mean": 26371,
+    "median": 28136
+  },
+  "tax_due_stats": {
+    "min": 54.06,
+    "max": 866.42,
+    "mean": 430.26,
+    "median": 430.37
+  },
+  "routes": {
+    "always_or_almost_always_visited": [
+      "California",
+      "Colorado",
+      "Idaho",
+      "Illinois",
+      "Iowa",
+      "Kansas",
+      "Minnesota",
+      "Missouri",
+      "Nebraska",
+      "Nevada",
+      "New Mexico",
+      "Oklahoma",
+      "Texas",
+      "Utah",
+      "Wyoming"
+    ],
+    "frequently_visited": [
+      "Indiana",
+      "Kentucky",
+      "Montana",
+      "North Carolina",
+      "North Dakota",
+      "Ohio",
+      "Oregon",
+      "South Carolina",
+      "South Dakota",
+      "Tennessee",
+      "Washington",
+      "Wisconsin"
+    ],
+    "occasionally_visited": [
+      "Arizona",
+      "Arkansas",
+      "Georgia",
+      "Virginia",
+      "West Virginia"
+    ],
+    "rare_one_off": [
+      "Alabama",
+      "Michigan",
+      "Mississippi"
+    ],
+    "top_10_by_total_miles": [
+      {
+        "state": "California",
+        "total_miles_over_history": 75496
+      },
+      {
+        "state": "Nevada",
+        "total_miles_over_history": 43081
+      },
+      {
+        "state": "Nebraska",
+        "total_miles_over_history": 35304
+      },
+      {
+        "state": "Wyoming",
+        "total_miles_over_history": 34992
+      },
+      {
+        "state": "Utah",
+        "total_miles_over_history": 24589
+      },
+      {
+        "state": "Texas",
+        "total_miles_over_history": 18637
+      },
+      {
+        "state": "Missouri",
+        "total_miles_over_history": 17211
+      },
+      {
+        "state": "New Mexico",
+        "total_miles_over_history": 16221
+      },
+      {
+        "state": "Kansas",
+        "total_miles_over_history": 14781
+      },
+      {
+        "state": "Iowa",
+        "total_miles_over_history": 12925
+      }
+    ]
+  },
+  "surcharge_history": {
+    "states_with_surcharge_lines": [
+      "Kentucky",
+      "Virginia"
+    ],
+    "quarters_with_surcharge_lines": 8
+  },
+  "patterns_and_flags": [
+    "California is the single largest revenue contributor every quarter.",
+    "Negative net taxable gallons are NORMAL for AZ, NM, NV, WY.",
+    "Oregon: 200\u20132,300 miles per quarter at $0 IFTA rate.",
+    "KY and VA surcharge lines appear only when those states had taxable miles.",
+    "Q4 2024 anomaly: 6,670 miles, $184 tax \u2014 likely truck downtime."
+  ],
+  "comparison_thresholds": {
+    "fleet_mpg": {"min": 5.93, "max": 7.52, "tolerance": 0.5},
+    "fleet_miles": {"min": 6670, "max": 33556, "low_threshold": 20000},
+    "total_tax_due": {"min": 54.06, "max": 866.42, "tolerance": 100}
+  },
+  "narrative_for_agent": "Retired single-truck carrier (truck #800), California base state, CDTFA portal (account 238-929600). Historical MPG 5.93\u20137.52, miles 6.7K\u201333.5K per quarter, tax $54\u2013$866. Heavy California operator. KY and VA surcharge lines appear only when those states had taxable miles. Q4 2024 had unusually low miles (6,670) \u2014 likely truck downtime. Use only as a reference example of a complete IFTA Quarterly Return."
+}

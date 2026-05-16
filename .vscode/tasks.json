@@ -1,0 +1,133 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🚚 IFTA — Deliver Q2-2026 (one-button)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["deliver", "--quarter", "Q2-2026"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "🚚 IFTA — Deliver (pick quarter)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["deliver", "--quarter", "${input:quarter}"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "test",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "args": ["-v"],
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "lint",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff",
+      "args": ["check", "src", "tests", "scripts"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "format",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff",
+      "args": ["format", "src", "tests", "scripts"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent" }
+    },
+    {
+      "label": "build (test + lint)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["test", "lint"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "ifta run (Q1-2026)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["run", "--quarter", "Q1-2026"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ifta review (Q4-2025, Opus)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["review", "--quarter", "Q4-2025", "--model", "claude-opus-4-7"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ifta chat",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["chat"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "refresh rate matrix",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["rates", "--quarter", "${input:quarter}", "--force"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    },
+    {
+      "label": "extract David history",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/extract_david.py"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    },
+    {
+      "label": "extract MyTruck history",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/extract_my_truck.py"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    },
+    {
+      "label": "generate Q2-2026 test data",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["scripts/generate_test_data.py"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always" }
+    },
+    {
+      "label": "ifta run (any quarter)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["run", "--quarter", "${input:quarter}"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "ifta review (any quarter, Opus)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ifta",
+      "args": ["review", "--quarter", "${input:quarter}"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "quarter",
+      "type": "promptString",
+      "description": "Quarter (e.g. Q1-2026)",
+      "default": "Q1-2026"
+    }
+  ]
+}

@@ -1,0 +1,2699 @@
+{
+  "Q1 2025": {
+    "quarter": "Q1 2025",
+    "trucks": [
+      "2013",
+      "2016",
+      "2017",
+      "2019"
+    ],
+    "states": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "FL",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "MO",
+      "MS",
+      "MT",
+      "NC",
+      "NE",
+      "NM",
+      "NV",
+      "OH",
+      "OK",
+      "OR",
+      "SC",
+      "TN",
+      "TX",
+      "UT",
+      "WA",
+      "WI",
+      "WY"
+    ],
+    "fleet_miles": 110525.0,
+    "fleet_gallons": 17137.0,
+    "fleet_mpg": 6.4495,
+    "per_truck": {
+      "2013": {
+        "AR": {
+          "miles": 40.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 4967.0,
+          "gallons": 1269.0
+        },
+        "CA": {
+          "miles": 10886.0,
+          "gallons": 1005.0
+        },
+        "IA": {
+          "miles": 13.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 646.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 485.0,
+          "gallons": 0.0
+        },
+        "MT": {
+          "miles": 711.0,
+          "gallons": 149.0
+        },
+        "NE": {
+          "miles": 460.0,
+          "gallons": 214.0
+        },
+        "NM": {
+          "miles": 775.0,
+          "gallons": 100.0
+        },
+        "NV": {
+          "miles": 3879.0,
+          "gallons": 884.0
+        },
+        "OK": {
+          "miles": 358.0,
+          "gallons": 150.0
+        },
+        "OR": {
+          "miles": 1497.0,
+          "gallons": 154.0
+        },
+        "TX": {
+          "miles": 1675.0,
+          "gallons": 422.0
+        },
+        "UT": {
+          "miles": 625.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 31.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 405.0,
+          "gallons": 111.0
+        }
+      },
+      "2016": {
+        "AZ": {
+          "miles": 5136.0,
+          "gallons": 1666.0
+        },
+        "CA": {
+          "miles": 13181.0,
+          "gallons": 693.0
+        },
+        "NE": {
+          "miles": 660.0,
+          "gallons": 0.0
+        },
+        "NM": {
+          "miles": 319.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 6142.0,
+          "gallons": 1443.0
+        },
+        "OR": {
+          "miles": 1857.0,
+          "gallons": 0.0
+        },
+        "UT": {
+          "miles": 395.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 304.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 806.0,
+          "gallons": 305.0
+        }
+      },
+      "2017": {
+        "AL": {
+          "miles": 534.0,
+          "gallons": 0.0
+        },
+        "AR": {
+          "miles": 1136.0,
+          "gallons": 269.0
+        },
+        "AZ": {
+          "miles": 3362.0,
+          "gallons": 677.0
+        },
+        "CA": {
+          "miles": 6986.0,
+          "gallons": 684.0
+        },
+        "CO": {
+          "miles": 69.0,
+          "gallons": 0.0
+        },
+        "FL": {
+          "miles": 435.0,
+          "gallons": 105.0
+        },
+        "GA": {
+          "miles": 751.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 13.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 1282.0,
+          "gallons": 122.0
+        },
+        "IL": {
+          "miles": 325.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 158.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 107.0,
+          "gallons": 0.0
+        },
+        "KY": {
+          "miles": 308.0,
+          "gallons": 113.0
+        },
+        "MS": {
+          "miles": 241.0,
+          "gallons": 33.0
+        },
+        "MO": {
+          "miles": 672.0,
+          "gallons": 120.0
+        },
+        "NC": {
+          "miles": 71.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 453.0,
+          "gallons": 0.0
+        },
+        "NM": {
+          "miles": 1555.0,
+          "gallons": 365.0
+        },
+        "NV": {
+          "miles": 3456.0,
+          "gallons": 439.0
+        },
+        "OH": {
+          "miles": 317.0,
+          "gallons": 0.0
+        },
+        "OK": {
+          "miles": 1261.0,
+          "gallons": 382.0
+        },
+        "OR": {
+          "miles": 2621.0,
+          "gallons": 750.0
+        },
+        "SC": {
+          "miles": 266.0,
+          "gallons": 114.0
+        },
+        "TN": {
+          "miles": 469.0,
+          "gallons": 122.0
+        },
+        "TX": {
+          "miles": 1657.0,
+          "gallons": 224.0
+        },
+        "UT": {
+          "miles": 1080.0,
+          "gallons": 169.0
+        },
+        "WA": {
+          "miles": 1282.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 460.0,
+          "gallons": 120.0
+        }
+      },
+      "2019": {
+        "AZ": {
+          "miles": 31.0,
+          "gallons": 154.0
+        },
+        "CA": {
+          "miles": 13592.0,
+          "gallons": 1603.0
+        },
+        "CO": {
+          "miles": 455.0,
+          "gallons": 115.0
+        },
+        "IA": {
+          "miles": 621.0,
+          "gallons": 108.0
+        },
+        "ID": {
+          "miles": 958.0,
+          "gallons": 75.0
+        },
+        "IL": {
+          "miles": 250.0,
+          "gallons": 0.0
+        },
+        "MT": {
+          "miles": 347.0,
+          "gallons": 133.0
+        },
+        "NE": {
+          "miles": 813.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 2114.0,
+          "gallons": 903.0
+        },
+        "OR": {
+          "miles": 2040.0,
+          "gallons": 385.0
+        },
+        "UT": {
+          "miles": 798.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 368.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 387.0,
+          "gallons": 217.0
+        },
+        "WI": {
+          "miles": 171.0,
+          "gallons": 71.0
+        }
+      }
+    },
+    "per_state_total": {
+      "AR": {
+        "miles": 1176.0,
+        "gallons": 269.0
+      },
+      "AZ": {
+        "miles": 13496.0,
+        "gallons": 3766.0
+      },
+      "CA": {
+        "miles": 44645.0,
+        "gallons": 3985.0
+      },
+      "IA": {
+        "miles": 647.0,
+        "gallons": 108.0
+      },
+      "ID": {
+        "miles": 2886.0,
+        "gallons": 197.0
+      },
+      "MO": {
+        "miles": 1157.0,
+        "gallons": 120.0
+      },
+      "MT": {
+        "miles": 1058.0,
+        "gallons": 282.0
+      },
+      "NE": {
+        "miles": 2386.0,
+        "gallons": 214.0
+      },
+      "NM": {
+        "miles": 2649.0,
+        "gallons": 465.0
+      },
+      "NV": {
+        "miles": 15591.0,
+        "gallons": 3669.0
+      },
+      "OK": {
+        "miles": 1619.0,
+        "gallons": 532.0
+      },
+      "OR": {
+        "miles": 8015.0,
+        "gallons": 1289.0
+      },
+      "TX": {
+        "miles": 3332.0,
+        "gallons": 646.0
+      },
+      "UT": {
+        "miles": 2898.0,
+        "gallons": 169.0
+      },
+      "WA": {
+        "miles": 1985.0,
+        "gallons": 0.0
+      },
+      "WY": {
+        "miles": 2058.0,
+        "gallons": 753.0
+      },
+      "AL": {
+        "miles": 534.0,
+        "gallons": 0.0
+      },
+      "CO": {
+        "miles": 524.0,
+        "gallons": 115.0
+      },
+      "FL": {
+        "miles": 435.0,
+        "gallons": 105.0
+      },
+      "GA": {
+        "miles": 751.0,
+        "gallons": 0.0
+      },
+      "IL": {
+        "miles": 575.0,
+        "gallons": 0.0
+      },
+      "IN": {
+        "miles": 158.0,
+        "gallons": 0.0
+      },
+      "KS": {
+        "miles": 107.0,
+        "gallons": 0.0
+      },
+      "KY": {
+        "miles": 308.0,
+        "gallons": 113.0
+      },
+      "MS": {
+        "miles": 241.0,
+        "gallons": 33.0
+      },
+      "NC": {
+        "miles": 71.0,
+        "gallons": 0.0
+      },
+      "OH": {
+        "miles": 317.0,
+        "gallons": 0.0
+      },
+      "SC": {
+        "miles": 266.0,
+        "gallons": 114.0
+      },
+      "TN": {
+        "miles": 469.0,
+        "gallons": 122.0
+      },
+      "WI": {
+        "miles": 171.0,
+        "gallons": 71.0
+      }
+    }
+  },
+  "Q2 2025": {
+    "quarter": "Q2 2025",
+    "trucks": [
+      "2013",
+      "2016",
+      "2017",
+      "2019"
+    ],
+    "states": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "MN",
+      "MO",
+      "MS",
+      "MT",
+      "NE",
+      "NM",
+      "NV",
+      "OK",
+      "OR",
+      "SC",
+      "TN",
+      "TX",
+      "UT",
+      "WA",
+      "WI",
+      "WY"
+    ],
+    "fleet_miles": 132550.0,
+    "fleet_gallons": 19394.0,
+    "fleet_mpg": 6.8346,
+    "per_truck": {
+      "2013": {
+        "AR": {
+          "miles": 521.0,
+          "gallons": 130.0
+        },
+        "AZ": {
+          "miles": 362.0,
+          "gallons": 100.0
+        },
+        "CA": {
+          "miles": 4900.0,
+          "gallons": 224.0
+        },
+        "CO": {
+          "miles": 410.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 954.0,
+          "gallons": 363.0
+        },
+        "ID": {
+          "miles": 3064.0,
+          "gallons": 714.0
+        },
+        "IL": {
+          "miles": 125.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 432.0,
+          "gallons": 68.0
+        },
+        "MN": {
+          "miles": 122.0,
+          "gallons": 0.0
+        },
+        "MS": {
+          "miles": 39.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 1269.0,
+          "gallons": 0.0
+        },
+        "MT": {
+          "miles": 914.0,
+          "gallons": 90.0
+        },
+        "NE": {
+          "miles": 1961.0,
+          "gallons": 206.0
+        },
+        "NM": {
+          "miles": 859.0,
+          "gallons": 216.0
+        },
+        "NV": {
+          "miles": 4829.0,
+          "gallons": 1351.0
+        },
+        "OK": {
+          "miles": 331.0,
+          "gallons": 143.0
+        },
+        "OR": {
+          "miles": 3058.0,
+          "gallons": 215.0
+        },
+        "TN": {
+          "miles": 31.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 177.0,
+          "gallons": 0.0
+        },
+        "UT": {
+          "miles": 2430.0,
+          "gallons": 175.0
+        },
+        "WA": {
+          "miles": 1905.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 1257.0,
+          "gallons": 508.0
+        },
+        "WI": {
+          "miles": 452.0,
+          "gallons": 162.0
+        }
+      },
+      "2016": {
+        "AZ": {
+          "miles": 5934.0,
+          "gallons": 1093.0
+        },
+        "CA": {
+          "miles": 8879.0,
+          "gallons": 606.0
+        },
+        "CO": {
+          "miles": 69.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 13.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 71.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 261.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 299.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 253.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 675.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 1060.0,
+          "gallons": 224.0
+        },
+        "NM": {
+          "miles": 1342.0,
+          "gallons": 201.0
+        },
+        "NV": {
+          "miles": 7619.0,
+          "gallons": 1197.0
+        },
+        "OK": {
+          "miles": 674.0,
+          "gallons": 412.0
+        },
+        "OR": {
+          "miles": 2567.0,
+          "gallons": 692.0
+        },
+        "TX": {
+          "miles": 413.0,
+          "gallons": 0.0
+        },
+        "UT": {
+          "miles": 1642.0,
+          "gallons": 184.0
+        },
+        "WA": {
+          "miles": 738.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 889.0,
+          "gallons": 218.0
+        }
+      },
+      "2017": {
+        "AL": {
+          "miles": 188.0,
+          "gallons": 101.0
+        },
+        "AR": {
+          "miles": 569.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 8536.0,
+          "gallons": 1417.0
+        },
+        "CA": {
+          "miles": 6481.0,
+          "gallons": 514.0
+        },
+        "CO": {
+          "miles": 298.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 13.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 226.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 298.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 284.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 1378.0,
+          "gallons": 121.0
+        },
+        "KY": {
+          "miles": 147.0,
+          "gallons": 143.0
+        },
+        "MS": {
+          "miles": 195.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 642.0,
+          "gallons": 90.0
+        },
+        "NE": {
+          "miles": 438.0,
+          "gallons": 145.0
+        },
+        "NM": {
+          "miles": 2009.0,
+          "gallons": 379.0
+        },
+        "NV": {
+          "miles": 7532.0,
+          "gallons": 899.0
+        },
+        "OK": {
+          "miles": 776.0,
+          "gallons": 263.0
+        },
+        "OR": {
+          "miles": 556.0,
+          "gallons": 140.0
+        },
+        "TN": {
+          "miles": 50.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 538.0,
+          "gallons": 0.0
+        },
+        "UT": {
+          "miles": 541.0,
+          "gallons": 135.0
+        },
+        "WA": {
+          "miles": 166.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 772.0,
+          "gallons": 137.0
+        }
+      },
+      "2019": {
+        "AL": {
+          "miles": 190.0,
+          "gallons": 61.0
+        },
+        "AR": {
+          "miles": 286.0,
+          "gallons": 61.0
+        },
+        "AZ": {
+          "miles": 3835.0,
+          "gallons": 1209.0
+        },
+        "CA": {
+          "miles": 9541.0,
+          "gallons": 319.0
+        },
+        "GA": {
+          "miles": 705.0,
+          "gallons": 61.0
+        },
+        "IA": {
+          "miles": 40.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 1879.0,
+          "gallons": 163.0
+        },
+        "IL": {
+          "miles": 559.0,
+          "gallons": 0.0
+        },
+        "KY": {
+          "miles": 215.0,
+          "gallons": 0.0
+        },
+        "MS": {
+          "miles": 119.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 1145.0,
+          "gallons": 205.0
+        },
+        "MT": {
+          "miles": 1437.0,
+          "gallons": 128.0
+        },
+        "NE": {
+          "miles": 1330.0,
+          "gallons": 203.0
+        },
+        "NM": {
+          "miles": 446.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 6844.0,
+          "gallons": 977.0
+        },
+        "OK": {
+          "miles": 333.0,
+          "gallons": 80.0
+        },
+        "OR": {
+          "miles": 3035.0,
+          "gallons": 647.0
+        },
+        "SC": {
+          "miles": 50.0,
+          "gallons": 0.0
+        },
+        "TN": {
+          "miles": 393.0,
+          "gallons": 136.0
+        },
+        "TX": {
+          "miles": 177.0,
+          "gallons": 0.0
+        },
+        "UT": {
+          "miles": 1622.0,
+          "gallons": 719.0
+        },
+        "WA": {
+          "miles": 655.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 1281.0,
+          "gallons": 449.0
+        }
+      }
+    },
+    "per_state_total": {
+      "AR": {
+        "miles": 1376.0,
+        "gallons": 191.0
+      },
+      "AZ": {
+        "miles": 18667.0,
+        "gallons": 3819.0
+      },
+      "CA": {
+        "miles": 29801.0,
+        "gallons": 1663.0
+      },
+      "CO": {
+        "miles": 777.0,
+        "gallons": 0.0
+      },
+      "IA": {
+        "miles": 1020.0,
+        "gallons": 363.0
+      },
+      "ID": {
+        "miles": 5240.0,
+        "gallons": 877.0
+      },
+      "IL": {
+        "miles": 1243.0,
+        "gallons": 0.0
+      },
+      "KS": {
+        "miles": 2063.0,
+        "gallons": 189.0
+      },
+      "MN": {
+        "miles": 122.0,
+        "gallons": 0.0
+      },
+      "MS": {
+        "miles": 353.0,
+        "gallons": 0.0
+      },
+      "MO": {
+        "miles": 3731.0,
+        "gallons": 295.0
+      },
+      "MT": {
+        "miles": 2351.0,
+        "gallons": 218.0
+      },
+      "NE": {
+        "miles": 4789.0,
+        "gallons": 778.0
+      },
+      "NM": {
+        "miles": 4656.0,
+        "gallons": 796.0
+      },
+      "NV": {
+        "miles": 26824.0,
+        "gallons": 4424.0
+      },
+      "OK": {
+        "miles": 2114.0,
+        "gallons": 898.0
+      },
+      "OR": {
+        "miles": 9216.0,
+        "gallons": 1694.0
+      },
+      "TN": {
+        "miles": 474.0,
+        "gallons": 136.0
+      },
+      "TX": {
+        "miles": 1305.0,
+        "gallons": 0.0
+      },
+      "UT": {
+        "miles": 6235.0,
+        "gallons": 1213.0
+      },
+      "WA": {
+        "miles": 3464.0,
+        "gallons": 0.0
+      },
+      "WY": {
+        "miles": 4199.0,
+        "gallons": 1312.0
+      },
+      "WI": {
+        "miles": 452.0,
+        "gallons": 162.0
+      },
+      "IN": {
+        "miles": 583.0,
+        "gallons": 0.0
+      },
+      "AL": {
+        "miles": 378.0,
+        "gallons": 162.0
+      },
+      "KY": {
+        "miles": 362.0,
+        "gallons": 143.0
+      },
+      "GA": {
+        "miles": 705.0,
+        "gallons": 61.0
+      },
+      "SC": {
+        "miles": 50.0,
+        "gallons": 0.0
+      }
+    },
+    "fuel_vendor_breakdown": {
+      "quarter": "Q2 2025",
+      "vendors": [
+        "EDS",
+        "Pilot",
+        "TA"
+      ],
+      "vendor_totals_gallons": {
+        "TA": 7096.0,
+        "Pilot": 11673.0,
+        "EDS": 625.0
+      },
+      "per_truck": {
+        "2019": {
+          "AL": {
+            "TA": 61.0
+          },
+          "AR": {
+            "TA": 61.0
+          },
+          "AZ": {
+            "TA": 418.0,
+            "Pilot": 791.0
+          },
+          "CA": {
+            "TA": 319.0
+          },
+          "GA": {
+            "TA": 61.0
+          },
+          "ID": {
+            "TA": 163.0
+          },
+          "MO": {
+            "TA": 205.0
+          },
+          "MT": {
+            "TA": 128.0
+          },
+          "NE": {
+            "TA": 203.0
+          },
+          "NV": {
+            "TA": 736.0,
+            "Pilot": 241.0
+          },
+          "OK": {
+            "TA": 80.0
+          },
+          "OR": {
+            "TA": 359.0,
+            "Pilot": 288.0
+          },
+          "TN": {
+            "TA": 136.0
+          },
+          "UT": {
+            "TA": 719.0
+          },
+          "WY": {
+            "TA": 449.0
+          }
+        },
+        "2017": {
+          "AL": {
+            "Pilot": 101.0
+          },
+          "AZ": {
+            "Pilot": 1325.0,
+            "EDS": 92.0
+          },
+          "CA": {
+            "Pilot": 403.0,
+            "EDS": 111.0
+          },
+          "KS": {
+            "Pilot": 121.0
+          },
+          "KY": {
+            "Pilot": 143.0
+          },
+          "MO": {
+            "Pilot": 90.0
+          },
+          "NE": {
+            "Pilot": 145.0
+          },
+          "NM": {
+            "Pilot": 379.0
+          },
+          "NV": {
+            "Pilot": 899.0
+          },
+          "OK": {
+            "Pilot": 263.0
+          },
+          "OR": {
+            "Pilot": 140.0
+          },
+          "UT": {
+            "Pilot": 135.0
+          },
+          "WY": {
+            "Pilot": 137.0
+          }
+        },
+        "2016": {
+          "AZ": {
+            "Pilot": 1093.0
+          },
+          "CA": {
+            "Pilot": 557.0,
+            "EDS": 49.0
+          },
+          "NE": {
+            "Pilot": 224.0
+          },
+          "NM": {
+            "Pilot": 201.0
+          },
+          "NV": {
+            "Pilot": 1009.0,
+            "EDS": 188.0
+          },
+          "OK": {
+            "Pilot": 227.0,
+            "EDS": 185.0
+          },
+          "OR": {
+            "Pilot": 692.0
+          },
+          "UT": {
+            "Pilot": 184.0
+          },
+          "WY": {
+            "Pilot": 218.0
+          }
+        },
+        "2013": {
+          "AR": {
+            "Pilot": 130.0
+          },
+          "AZ": {
+            "Pilot": 100.0
+          },
+          "CA": {
+            "TA": 151.0,
+            "Pilot": 73.0
+          },
+          "IA": {
+            "TA": 179.0,
+            "Pilot": 184.0
+          },
+          "ID": {
+            "TA": 491.0,
+            "Pilot": 223.0
+          },
+          "KS": {
+            "Pilot": 68.0
+          },
+          "MT": {
+            "TA": 90.0
+          },
+          "NE": {
+            "TA": 206.0
+          },
+          "NM": {
+            "TA": 110.0,
+            "Pilot": 106.0
+          },
+          "NV": {
+            "TA": 1221.0,
+            "Pilot": 130.0
+          },
+          "OK": {
+            "Pilot": 143.0
+          },
+          "OR": {
+            "TA": 70.0,
+            "Pilot": 145.0
+          },
+          "UT": {
+            "Pilot": 175.0
+          },
+          "WY": {
+            "TA": 318.0,
+            "Pilot": 190.0
+          },
+          "WI": {
+            "TA": 162.0
+          }
+        }
+      }
+    }
+  },
+  "Q3 2025": {
+    "quarter": "Q3 2025",
+    "trucks": [
+      "2013",
+      "2015",
+      "2017",
+      "2019"
+    ],
+    "states": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "MN",
+      "MO",
+      "MS",
+      "MT",
+      "ND",
+      "NE",
+      "NM",
+      "NV",
+      "OK",
+      "OR",
+      "SD",
+      "TN",
+      "TX",
+      "UT",
+      "WA",
+      "WI",
+      "WY"
+    ],
+    "fleet_miles": 126674.0,
+    "fleet_gallons": 18247.0,
+    "fleet_mpg": 6.9422,
+    "per_truck": {
+      "2013": {
+        "AL": {
+          "miles": 192.0,
+          "gallons": 0.0
+        },
+        "AR": {
+          "miles": 379.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 3601.0,
+          "gallons": 846.0
+        },
+        "CA": {
+          "miles": 9836.0,
+          "gallons": 425.0
+        },
+        "CO": {
+          "miles": 1185.0,
+          "gallons": 190.0
+        },
+        "GA": {
+          "miles": 314.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 143.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 748.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 199.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 1233.0,
+          "gallons": 348.0
+        },
+        "KY": {
+          "miles": 97.0,
+          "gallons": 0.0
+        },
+        "MN": {
+          "miles": 57.0,
+          "gallons": 0.0
+        },
+        "MS": {
+          "miles": 119.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 575.0,
+          "gallons": 100.0
+        },
+        "NM": {
+          "miles": 2848.0,
+          "gallons": 598.0
+        },
+        "NV": {
+          "miles": 4362.0,
+          "gallons": 943.0
+        },
+        "OK": {
+          "miles": 765.0,
+          "gallons": 166.0
+        },
+        "OR": {
+          "miles": 785.0,
+          "gallons": 190.0
+        },
+        "SD": {
+          "miles": 201.0,
+          "gallons": 0.0
+        },
+        "TN": {
+          "miles": 206.0,
+          "gallons": 197.0
+        },
+        "TX": {
+          "miles": 3111.0,
+          "gallons": 910.0
+        },
+        "UT": {
+          "miles": 1327.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 621.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 1147.0,
+          "gallons": 431.0
+        },
+        "WI": {
+          "miles": 288.0,
+          "gallons": 0.0
+        }
+      },
+      "2015": {
+        "AR": {
+          "miles": 94.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 7895.0,
+          "gallons": 1719.0
+        },
+        "CA": {
+          "miles": 10898.0,
+          "gallons": 375.0
+        },
+        "IA": {
+          "miles": 13.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 916.0,
+          "gallons": 85.0
+        },
+        "MO": {
+          "miles": 330.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 459.0,
+          "gallons": 225.0
+        },
+        "NM": {
+          "miles": 3178.0,
+          "gallons": 192.0
+        },
+        "NV": {
+          "miles": 5117.0,
+          "gallons": 859.0
+        },
+        "OK": {
+          "miles": 271.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 1932.0,
+          "gallons": 1011.0
+        },
+        "UT": {
+          "miles": 196.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 399.0,
+          "gallons": 114.0
+        }
+      },
+      "2017": {
+        "AR": {
+          "miles": 48.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 3512.0,
+          "gallons": 410.0
+        },
+        "CA": {
+          "miles": 9212.0,
+          "gallons": 804.0
+        },
+        "CO": {
+          "miles": 69.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 273.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 580.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 160.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 586.0,
+          "gallons": 85.0
+        },
+        "MN": {
+          "miles": 147.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 647.0,
+          "gallons": 0.0
+        },
+        "MT": {
+          "miles": 690.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 1765.0,
+          "gallons": 314.0
+        },
+        "NM": {
+          "miles": 2196.0,
+          "gallons": 376.0
+        },
+        "ND": {
+          "miles": 603.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 2952.0,
+          "gallons": 859.0
+        },
+        "OK": {
+          "miles": 297.0,
+          "gallons": 0.0
+        },
+        "OR": {
+          "miles": 641.0,
+          "gallons": 0.0
+        },
+        "SD": {
+          "miles": 420.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 3114.0,
+          "gallons": 1011.0
+        },
+        "UT": {
+          "miles": 1548.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 183.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 1210.0,
+          "gallons": 290.0
+        }
+      },
+      "2019": {
+        "AZ": {
+          "miles": 8290.0,
+          "gallons": 2253.0
+        },
+        "CA": {
+          "miles": 14337.0,
+          "gallons": 393.0
+        },
+        "ID": {
+          "miles": 86.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 6208.0,
+          "gallons": 1419.0
+        },
+        "OR": {
+          "miles": 803.0,
+          "gallons": 109.0
+        },
+        "WA": {
+          "miles": 60.0,
+          "gallons": 0.0
+        }
+      }
+    },
+    "per_state_total": {
+      "AL": {
+        "miles": 192.0,
+        "gallons": 0.0
+      },
+      "AR": {
+        "miles": 521.0,
+        "gallons": 0.0
+      },
+      "AZ": {
+        "miles": 23298.0,
+        "gallons": 5228.0
+      },
+      "CA": {
+        "miles": 44283.0,
+        "gallons": 1997.0
+      },
+      "CO": {
+        "miles": 1254.0,
+        "gallons": 190.0
+      },
+      "GA": {
+        "miles": 314.0,
+        "gallons": 0.0
+      },
+      "ID": {
+        "miles": 809.0,
+        "gallons": 0.0
+      },
+      "IL": {
+        "miles": 908.0,
+        "gallons": 0.0
+      },
+      "IN": {
+        "miles": 199.0,
+        "gallons": 0.0
+      },
+      "KS": {
+        "miles": 2735.0,
+        "gallons": 518.0
+      },
+      "KY": {
+        "miles": 97.0,
+        "gallons": 0.0
+      },
+      "MN": {
+        "miles": 204.0,
+        "gallons": 0.0
+      },
+      "MS": {
+        "miles": 119.0,
+        "gallons": 0.0
+      },
+      "MO": {
+        "miles": 1552.0,
+        "gallons": 100.0
+      },
+      "NM": {
+        "miles": 8222.0,
+        "gallons": 1166.0
+      },
+      "NV": {
+        "miles": 18639.0,
+        "gallons": 4080.0
+      },
+      "OK": {
+        "miles": 1333.0,
+        "gallons": 166.0
+      },
+      "OR": {
+        "miles": 2229.0,
+        "gallons": 299.0
+      },
+      "SD": {
+        "miles": 621.0,
+        "gallons": 0.0
+      },
+      "TN": {
+        "miles": 206.0,
+        "gallons": 197.0
+      },
+      "TX": {
+        "miles": 8157.0,
+        "gallons": 2932.0
+      },
+      "UT": {
+        "miles": 3071.0,
+        "gallons": 0.0
+      },
+      "WA": {
+        "miles": 864.0,
+        "gallons": 0.0
+      },
+      "WY": {
+        "miles": 2756.0,
+        "gallons": 835.0
+      },
+      "WI": {
+        "miles": 288.0,
+        "gallons": 0.0
+      },
+      "IA": {
+        "miles": 286.0,
+        "gallons": 0.0
+      },
+      "NE": {
+        "miles": 2224.0,
+        "gallons": 539.0
+      },
+      "MT": {
+        "miles": 690.0,
+        "gallons": 0.0
+      },
+      "ND": {
+        "miles": 603.0,
+        "gallons": 0.0
+      }
+    },
+    "fuel_vendor_breakdown": {
+      "quarter": "Q3 2025",
+      "vendors": [
+        "EDS",
+        "Pilot",
+        "Relay"
+      ],
+      "vendor_totals_gallons": {
+        "Pilot": 7926.0,
+        "Relay": 10321.0
+      },
+      "per_truck": {
+        "2019": {
+          "AZ": {
+            "Pilot": 720.0,
+            "Relay": 1533.0
+          },
+          "CA": {
+            "Pilot": 72.0,
+            "Relay": 321.0
+          },
+          "NV": {
+            "Pilot": 463.0,
+            "Relay": 956.0
+          },
+          "OR": {
+            "Pilot": 109.0
+          }
+        },
+        "2017": {
+          "AZ": {
+            "Pilot": 205.0,
+            "Relay": 205.0
+          },
+          "CA": {
+            "Pilot": 429.0,
+            "Relay": 375.0
+          },
+          "KS": {
+            "Relay": 85.0
+          },
+          "NE": {
+            "Pilot": 89.0,
+            "Relay": 225.0
+          },
+          "NM": {
+            "Pilot": 184.0,
+            "Relay": 192.0
+          },
+          "NV": {
+            "Relay": 859.0
+          },
+          "TX": {
+            "Relay": 1011.0
+          },
+          "WY": {
+            "Pilot": 176.0,
+            "Relay": 114.0
+          }
+        },
+        "2015": {
+          "AZ": {
+            "Pilot": 1250.0,
+            "Relay": 469.0
+          },
+          "CA": {
+            "Pilot": 375.0
+          },
+          "KS": {
+            "Pilot": 85.0
+          },
+          "NE": {
+            "Pilot": 225.0
+          },
+          "NM": {
+            "Pilot": 192.0
+          },
+          "NV": {
+            "Pilot": 566.0,
+            "Relay": 293.0
+          },
+          "TX": {
+            "Pilot": 826.0,
+            "Relay": 185.0
+          },
+          "WY": {
+            "Pilot": 114.0
+          }
+        },
+        "2013": {
+          "AZ": {
+            "Pilot": 63.0,
+            "Relay": 783.0
+          },
+          "CA": {
+            "Pilot": 305.0,
+            "Relay": 120.0
+          },
+          "CO": {
+            "Pilot": 190.0
+          },
+          "KS": {
+            "Pilot": 162.0,
+            "Relay": 186.0
+          },
+          "MO": {
+            "Pilot": 100.0
+          },
+          "NM": {
+            "Pilot": 294.0,
+            "Relay": 304.0
+          },
+          "NV": {
+            "Pilot": 359.0,
+            "Relay": 584.0
+          },
+          "OK": {
+            "Relay": 166.0
+          },
+          "OR": {
+            "Pilot": 190.0
+          },
+          "TN": {
+            "Relay": 197.0
+          },
+          "TX": {
+            "Pilot": 183.0,
+            "Relay": 727.0
+          },
+          "WY": {
+            "Relay": 431.0
+          }
+        }
+      }
+    }
+  },
+  "Q4 2025": {
+    "quarter": "Q4 2025",
+    "trucks": [
+      "2013",
+      "2015",
+      "2017",
+      "2019"
+    ],
+    "states": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "MN",
+      "MO",
+      "MS",
+      "MT",
+      "ND",
+      "NE",
+      "NM",
+      "NV",
+      "OH",
+      "OK",
+      "OR",
+      "TN",
+      "TX",
+      "UT",
+      "VA",
+      "WA",
+      "WI",
+      "WV",
+      "WY"
+    ],
+    "fleet_miles": 122583.0,
+    "fleet_gallons": 17686.0,
+    "fleet_mpg": 6.9311,
+    "per_truck": {
+      "2013": {
+        "AZ": {
+          "miles": 4666.0,
+          "gallons": 928.0
+        },
+        "CA": {
+          "miles": 11518.0,
+          "gallons": 370.0
+        },
+        "CO": {
+          "miles": 253.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 4.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 562.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 729.0,
+          "gallons": 287.0
+        },
+        "MN": {
+          "miles": 256.0,
+          "gallons": 0.0
+        },
+        "MT": {
+          "miles": 506.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 639.0,
+          "gallons": 0.0
+        },
+        "NM": {
+          "miles": 1815.0,
+          "gallons": 282.0
+        },
+        "ND": {
+          "miles": 535.0,
+          "gallons": 231.0
+        },
+        "NV": {
+          "miles": 4175.0,
+          "gallons": 1197.0
+        },
+        "OK": {
+          "miles": 899.0,
+          "gallons": 138.0
+        },
+        "OR": {
+          "miles": 1147.0,
+          "gallons": 450.0
+        },
+        "TX": {
+          "miles": 2131.0,
+          "gallons": 582.0
+        },
+        "UT": {
+          "miles": 556.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 434.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 759.0,
+          "gallons": 309.0
+        }
+      },
+      "2015": {
+        "AZ": {
+          "miles": 6047.0,
+          "gallons": 903.0
+        },
+        "CA": {
+          "miles": 13465.0,
+          "gallons": 193.0
+        },
+        "CO": {
+          "miles": 334.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 267.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 434.0,
+          "gallons": 99.0
+        },
+        "MO": {
+          "miles": 287.0,
+          "gallons": 0.0
+        },
+        "NM": {
+          "miles": 3229.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 1839.0,
+          "gallons": 1037.0
+        },
+        "OK": {
+          "miles": 1072.0,
+          "gallons": 183.0
+        },
+        "OR": {
+          "miles": 1291.0,
+          "gallons": 396.0
+        },
+        "TX": {
+          "miles": 3099.0,
+          "gallons": 1544.0
+        },
+        "UT": {
+          "miles": 631.0,
+          "gallons": 113.0
+        },
+        "WA": {
+          "miles": 723.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 343.0,
+          "gallons": 172.0
+        }
+      },
+      "2017": {
+        "AL": {
+          "miles": 191.0,
+          "gallons": 173.0
+        },
+        "AR": {
+          "miles": 1078.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 3685.0,
+          "gallons": 729.0
+        },
+        "CA": {
+          "miles": 4689.0,
+          "gallons": 447.0
+        },
+        "CO": {
+          "miles": 257.0,
+          "gallons": 0.0
+        },
+        "GA": {
+          "miles": 222.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 746.0,
+          "gallons": 152.0
+        },
+        "IL": {
+          "miles": 732.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 753.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 796.0,
+          "gallons": 0.0
+        },
+        "KY": {
+          "miles": 1226.0,
+          "gallons": 536.0
+        },
+        "MN": {
+          "miles": 340.0,
+          "gallons": 0.0
+        },
+        "MS": {
+          "miles": 103.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 749.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 476.0,
+          "gallons": 148.0
+        },
+        "NM": {
+          "miles": 2637.0,
+          "gallons": 311.0
+        },
+        "NV": {
+          "miles": 3176.0,
+          "gallons": 295.0
+        },
+        "OH": {
+          "miles": 346.0,
+          "gallons": 0.0
+        },
+        "OK": {
+          "miles": 1884.0,
+          "gallons": 585.0
+        },
+        "TN": {
+          "miles": 1201.0,
+          "gallons": 116.0
+        },
+        "TX": {
+          "miles": 2312.0,
+          "gallons": 475.0
+        },
+        "UT": {
+          "miles": 396.0,
+          "gallons": 0.0
+        },
+        "VA": {
+          "miles": 507.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 783.0,
+          "gallons": 277.0
+        },
+        "WI": {
+          "miles": 5.0,
+          "gallons": 0.0
+        },
+        "WV": {
+          "miles": 196.0,
+          "gallons": 0.0
+        }
+      },
+      "2019": {
+        "AZ": {
+          "miles": 7740.0,
+          "gallons": 1997.0
+        },
+        "CA": {
+          "miles": 9095.0,
+          "gallons": 132.0
+        },
+        "NM": {
+          "miles": 1286.0,
+          "gallons": 136.0
+        },
+        "NV": {
+          "miles": 6685.0,
+          "gallons": 827.0
+        },
+        "OK": {
+          "miles": 310.0,
+          "gallons": 0.0
+        },
+        "OR": {
+          "miles": 1238.0,
+          "gallons": 475.0
+        },
+        "TX": {
+          "miles": 1456.0,
+          "gallons": 461.0
+        },
+        "WA": {
+          "miles": 642.0,
+          "gallons": 0.0
+        }
+      }
+    },
+    "per_state_total": {
+      "AZ": {
+        "miles": 22138.0,
+        "gallons": 4557.0
+      },
+      "CA": {
+        "miles": 38767.0,
+        "gallons": 1142.0
+      },
+      "CO": {
+        "miles": 844.0,
+        "gallons": 0.0
+      },
+      "IA": {
+        "miles": 750.0,
+        "gallons": 152.0
+      },
+      "ID": {
+        "miles": 829.0,
+        "gallons": 0.0
+      },
+      "KS": {
+        "miles": 1959.0,
+        "gallons": 386.0
+      },
+      "MN": {
+        "miles": 596.0,
+        "gallons": 0.0
+      },
+      "MT": {
+        "miles": 506.0,
+        "gallons": 0.0
+      },
+      "NE": {
+        "miles": 1115.0,
+        "gallons": 148.0
+      },
+      "NM": {
+        "miles": 8967.0,
+        "gallons": 729.0
+      },
+      "ND": {
+        "miles": 535.0,
+        "gallons": 231.0
+      },
+      "NV": {
+        "miles": 15875.0,
+        "gallons": 3356.0
+      },
+      "OK": {
+        "miles": 4165.0,
+        "gallons": 906.0
+      },
+      "OR": {
+        "miles": 3676.0,
+        "gallons": 1321.0
+      },
+      "TX": {
+        "miles": 8998.0,
+        "gallons": 3062.0
+      },
+      "UT": {
+        "miles": 1583.0,
+        "gallons": 113.0
+      },
+      "WA": {
+        "miles": 1799.0,
+        "gallons": 0.0
+      },
+      "WY": {
+        "miles": 1885.0,
+        "gallons": 758.0
+      },
+      "MO": {
+        "miles": 1036.0,
+        "gallons": 0.0
+      },
+      "AL": {
+        "miles": 191.0,
+        "gallons": 173.0
+      },
+      "AR": {
+        "miles": 1078.0,
+        "gallons": 0.0
+      },
+      "GA": {
+        "miles": 222.0,
+        "gallons": 0.0
+      },
+      "IL": {
+        "miles": 732.0,
+        "gallons": 0.0
+      },
+      "IN": {
+        "miles": 753.0,
+        "gallons": 0.0
+      },
+      "KY": {
+        "miles": 1226.0,
+        "gallons": 536.0
+      },
+      "MS": {
+        "miles": 103.0,
+        "gallons": 0.0
+      },
+      "OH": {
+        "miles": 346.0,
+        "gallons": 0.0
+      },
+      "TN": {
+        "miles": 1201.0,
+        "gallons": 116.0
+      },
+      "VA": {
+        "miles": 507.0,
+        "gallons": 0.0
+      },
+      "WI": {
+        "miles": 5.0,
+        "gallons": 0.0
+      },
+      "WV": {
+        "miles": 196.0,
+        "gallons": 0.0
+      }
+    }
+  },
+  "Q1 2026": {
+    "quarter": "Q1 2026",
+    "trucks": [
+      "2013",
+      "2015",
+      "2017",
+      "2019",
+      "2016",
+      "55",
+      "07"
+    ],
+    "states": [
+      "AL",
+      "AR",
+      "AZ",
+      "CA",
+      "CO",
+      "GA",
+      "IA",
+      "ID",
+      "IL",
+      "IN",
+      "KS",
+      "KY",
+      "LA",
+      "MN",
+      "MO",
+      "MS",
+      "NE",
+      "NM",
+      "NV",
+      "OH",
+      "OK",
+      "OR",
+      "PA",
+      "TN",
+      "TX",
+      "UT",
+      "WA",
+      "WV",
+      "WY"
+    ],
+    "fleet_miles": 124877.0,
+    "fleet_gallons": 18707.0,
+    "fleet_mpg": 6.6754,
+    "per_truck": {
+      "2013": {
+        "AR": {
+          "miles": 363.0,
+          "gallons": 139.0
+        },
+        "AZ": {
+          "miles": 884.0,
+          "gallons": 320.0
+        },
+        "CA": {
+          "miles": 5023.0,
+          "gallons": 52.0
+        },
+        "CO": {
+          "miles": 69.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 892.0,
+          "gallons": 0.0
+        },
+        "ID": {
+          "miles": 273.0,
+          "gallons": 156.0
+        },
+        "IL": {
+          "miles": 369.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 85.0,
+          "gallons": 0.0
+        },
+        "LA": {
+          "miles": 161.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 569.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 2292.0,
+          "gallons": 516.0
+        },
+        "NM": {
+          "miles": 781.0,
+          "gallons": 170.0
+        },
+        "NV": {
+          "miles": 3313.0,
+          "gallons": 989.0
+        },
+        "OR": {
+          "miles": 1087.0,
+          "gallons": 218.0
+        },
+        "TX": {
+          "miles": 2527.0,
+          "gallons": 384.0
+        },
+        "UT": {
+          "miles": 1582.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 683.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 2105.0,
+          "gallons": 766.0
+        }
+      },
+      "2015": {
+        "AL": {
+          "miles": 211.0,
+          "gallons": 72.0
+        },
+        "AR": {
+          "miles": 432.0,
+          "gallons": 158.0
+        },
+        "AZ": {
+          "miles": 3819.0,
+          "gallons": 1383.0
+        },
+        "CA": {
+          "miles": 9480.0,
+          "gallons": 454.0
+        },
+        "GA": {
+          "miles": 195.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 339.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 617.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 539.0,
+          "gallons": 0.0
+        },
+        "KY": {
+          "miles": 706.0,
+          "gallons": 292.0
+        },
+        "LA": {
+          "miles": 193.0,
+          "gallons": 211.0
+        },
+        "MO": {
+          "miles": 1507.0,
+          "gallons": 0.0
+        },
+        "MS": {
+          "miles": 223.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 1820.0,
+          "gallons": 424.0
+        },
+        "NM": {
+          "miles": 1697.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 2529.0,
+          "gallons": 507.0
+        },
+        "OH": {
+          "miles": 523.0,
+          "gallons": 201.0
+        },
+        "OK": {
+          "miles": 693.0,
+          "gallons": 0.0
+        },
+        "PA": {
+          "miles": 134.0,
+          "gallons": 0.0
+        },
+        "TN": {
+          "miles": 202.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 3186.0,
+          "gallons": 598.0
+        },
+        "UT": {
+          "miles": 796.0,
+          "gallons": 100.0
+        },
+        "WV": {
+          "miles": 46.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 1614.0,
+          "gallons": 330.0
+        }
+      },
+      "2017": {
+        "AL": {
+          "miles": 315.0,
+          "gallons": 119.0
+        },
+        "AR": {
+          "miles": 293.0,
+          "gallons": 0.0
+        },
+        "AZ": {
+          "miles": 3185.0,
+          "gallons": 421.0
+        },
+        "CA": {
+          "miles": 7848.0,
+          "gallons": 785.0
+        },
+        "GA": {
+          "miles": 224.0,
+          "gallons": 0.0
+        },
+        "IA": {
+          "miles": 970.0,
+          "gallons": 153.0
+        },
+        "ID": {
+          "miles": 545.0,
+          "gallons": 0.0
+        },
+        "IL": {
+          "miles": 626.0,
+          "gallons": 0.0
+        },
+        "IN": {
+          "miles": 538.0,
+          "gallons": 0.0
+        },
+        "KS": {
+          "miles": 833.0,
+          "gallons": 0.0
+        },
+        "KY": {
+          "miles": 423.0,
+          "gallons": 119.0
+        },
+        "MN": {
+          "miles": 247.0,
+          "gallons": 0.0
+        },
+        "MO": {
+          "miles": 372.0,
+          "gallons": 155.0
+        },
+        "MS": {
+          "miles": 154.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 2056.0,
+          "gallons": 448.0
+        },
+        "NM": {
+          "miles": 2264.0,
+          "gallons": 645.0
+        },
+        "NV": {
+          "miles": 2932.0,
+          "gallons": 673.0
+        },
+        "OH": {
+          "miles": 747.0,
+          "gallons": 0.0
+        },
+        "OK": {
+          "miles": 643.0,
+          "gallons": 179.0
+        },
+        "OR": {
+          "miles": 1014.0,
+          "gallons": 262.0
+        },
+        "PA": {
+          "miles": 117.0,
+          "gallons": 0.0
+        },
+        "TN": {
+          "miles": 174.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 3725.0,
+          "gallons": 515.0
+        },
+        "UT": {
+          "miles": 611.0,
+          "gallons": 0.0
+        },
+        "WA": {
+          "miles": 296.0,
+          "gallons": 0.0
+        },
+        "WV": {
+          "miles": 58.0,
+          "gallons": 164.0
+        },
+        "WY": {
+          "miles": 1718.0,
+          "gallons": 540.0
+        }
+      },
+      "2019": {
+        "AZ": {
+          "miles": 8799.0,
+          "gallons": 2283.0
+        },
+        "CA": {
+          "miles": 10984.0,
+          "gallons": 220.0
+        },
+        "KS": {
+          "miles": 218.0,
+          "gallons": 0.0
+        },
+        "NE": {
+          "miles": 622.0,
+          "gallons": 238.0
+        },
+        "NM": {
+          "miles": 513.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 6482.0,
+          "gallons": 570.0
+        },
+        "OK": {
+          "miles": 236.0,
+          "gallons": 0.0
+        },
+        "OR": {
+          "miles": 594.0,
+          "gallons": 204.0
+        },
+        "TX": {
+          "miles": 1035.0,
+          "gallons": 440.0
+        },
+        "UT": {
+          "miles": 695.0,
+          "gallons": 185.0
+        },
+        "WA": {
+          "miles": 392.0,
+          "gallons": 0.0
+        },
+        "WY": {
+          "miles": 410.0,
+          "gallons": 0.0
+        }
+      },
+      "2016": {},
+      "55": {
+        "AZ": {
+          "miles": 1374.0,
+          "gallons": 494.0
+        },
+        "CA": {
+          "miles": 3462.0,
+          "gallons": 0.0
+        },
+        "CO": {
+          "miles": 69.0,
+          "gallons": 0.0
+        },
+        "NM": {
+          "miles": 390.0,
+          "gallons": 0.0
+        },
+        "NV": {
+          "miles": 420.0,
+          "gallons": 110.0
+        },
+        "OR": {
+          "miles": 228.0,
+          "gallons": 0.0
+        },
+        "TX": {
+          "miles": 44.0,
+          "gallons": 174.0
+        },
+        "UT": {
+          "miles": 423.0,
+          "gallons": 171.0
+        }
+      },
+      "07": {}
+    },
+    "per_state_total": {
+      "AR": {
+        "miles": 1088.0,
+        "gallons": 297.0
+      },
+      "AZ": {
+        "miles": 18061.0,
+        "gallons": 4901.0
+      },
+      "CA": {
+        "miles": 36797.0,
+        "gallons": 1511.0
+      },
+      "CO": {
+        "miles": 138.0,
+        "gallons": 0.0
+      },
+      "IA": {
+        "miles": 2201.0,
+        "gallons": 153.0
+      },
+      "ID": {
+        "miles": 818.0,
+        "gallons": 156.0
+      },
+      "IL": {
+        "miles": 1612.0,
+        "gallons": 0.0
+      },
+      "KS": {
+        "miles": 1136.0,
+        "gallons": 0.0
+      },
+      "LA": {
+        "miles": 354.0,
+        "gallons": 211.0
+      },
+      "MO": {
+        "miles": 2448.0,
+        "gallons": 155.0
+      },
+      "NE": {
+        "miles": 6790.0,
+        "gallons": 1626.0
+      },
+      "NM": {
+        "miles": 5645.0,
+        "gallons": 815.0
+      },
+      "NV": {
+        "miles": 15676.0,
+        "gallons": 2849.0
+      },
+      "OR": {
+        "miles": 2923.0,
+        "gallons": 684.0
+      },
+      "TX": {
+        "miles": 10517.0,
+        "gallons": 2111.0
+      },
+      "UT": {
+        "miles": 4107.0,
+        "gallons": 456.0
+      },
+      "WA": {
+        "miles": 1371.0,
+        "gallons": 0.0
+      },
+      "WY": {
+        "miles": 5847.0,
+        "gallons": 1636.0
+      },
+      "AL": {
+        "miles": 526.0,
+        "gallons": 191.0
+      },
+      "GA": {
+        "miles": 419.0,
+        "gallons": 0.0
+      },
+      "IN": {
+        "miles": 1077.0,
+        "gallons": 0.0
+      },
+      "KY": {
+        "miles": 1129.0,
+        "gallons": 411.0
+      },
+      "MS": {
+        "miles": 377.0,
+        "gallons": 0.0
+      },
+      "OH": {
+        "miles": 1270.0,
+        "gallons": 201.0
+      },
+      "OK": {
+        "miles": 1572.0,
+        "gallons": 179.0
+      },
+      "PA": {
+        "miles": 251.0,
+        "gallons": 0.0
+      },
+      "TN": {
+        "miles": 376.0,
+        "gallons": 0.0
+      },
+      "WV": {
+        "miles": 104.0,
+        "gallons": 164.0
+      },
+      "MN": {
+        "miles": 247.0,
+        "gallons": 0.0
+      }
+    }
+  }
+}

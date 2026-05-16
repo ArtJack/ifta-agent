@@ -1,0 +1,235 @@
+{
+  "_meta": {
+    "purpose": "Authoritative IFTA knowledge base the AI agent uses to ground answers. Updated quarterly when iftach.org publishes new rates.",
+    "last_reviewed": "2026-05-15",
+    "primary_sources": [
+      "iftach.org (Tax Rate Matrix)",
+      "California CDTFA online filing format (verified via MENSHIKOV LLC Q4 2025)",
+      "IFTA Articles of Agreement",
+      "IFTA Procedures Manual"
+    ]
+  },
+  "what_is_ifta": {
+    "definition": "International Fuel Tax Agreement — a cooperative agreement among the 48 contiguous U.S. states and 10 Canadian provinces that simplifies fuel-tax reporting for inter-jurisdictional motor carriers. Instead of fueling and paying tax in each state separately, the carrier files ONE quarterly return with their base jurisdiction, which redistributes funds to the others.",
+    "who_must_register": "Any qualified motor vehicle (≥26,000 lbs GVW, OR 3+ axles regardless of weight, OR used in combination with combined weight >26,000 lbs) that operates in 2+ IFTA jurisdictions.",
+    "decals_and_license": "Each qualified vehicle must display two IFTA decals (one per side of cab) issued by the base jurisdiction. License renews annually; decals are issued for the calendar year.",
+    "non_qualified_vehicles": "Recreational vehicles (motor homes, pickup trucks with attached campers, buses used for personal pleasure) are exempt even if they cross jurisdictions."
+  },
+  "filing_deadlines": {
+    "schedule": {
+      "Q1": {"months": "Jan-Mar", "due": "April 30"},
+      "Q2": {"months": "Apr-Jun", "due": "July 31"},
+      "Q3": {"months": "Jul-Sep", "due": "October 31"},
+      "Q4": {"months": "Oct-Dec", "due": "January 31"}
+    },
+    "deadline_rule": "Postmark or electronic submission on or before the last day of the month following the quarter end. If the deadline falls on a weekend or holiday, it shifts to the next business day.",
+    "must_file_even_if_zero": "A return MUST be filed each quarter even if the carrier did not operate or owes zero tax. Otherwise the license can be revoked."
+  },
+  "penalties_and_interest": {
+    "late_penalty": "Greater of $50 OR 10% of net tax due, whichever is more.",
+    "interest_rate": "Set by IFTA, Inc. — currently 1% per month or partial month, applied to the unpaid balance per jurisdiction. Confirm current rate annually as it can change.",
+    "license_revocation": "Failure to file for two consecutive quarters or failure to pay can result in license revocation. Operating without an IFTA license while qualified to need one is a separate violation per state."
+  },
+  "base_state_rules": {
+    "definition": "The single jurisdiction where the carrier is licensed for IFTA. Carrier files quarterly returns with this jurisdiction, which collects all tax and redistributes to other jurisdictions.",
+    "qualifications_to_be_base": [
+      "Qualified motor vehicle(s) are registered there",
+      "Operational records are maintained or made available there",
+      "Some mileage is accrued in the base jurisdiction"
+    ],
+    "change_of_base": "If you relocate your business, file a base-state-change request with both old and new jurisdictions. Cannot operate in two base states simultaneously."
+  },
+  "fleet_mpg_calculation": {
+    "formula": "Total Miles ÷ Total Gallons across ALL trucks in fleet, ALL jurisdictions, for the quarter.",
+    "rounding": "Rounded to 2 decimal places BEFORE per-state taxable-gallon calculation (verified via CDTFA filing).",
+    "sanity_range": {
+      "min_realistic_heavy_diesel": 4.0,
+      "max_realistic_heavy_diesel": 10.5,
+      "note": "Outside this band → likely a data error (missing miles, duplicate fuel entries, wrong units like km vs miles)."
+    }
+  },
+  "per_state_calculation": {
+    "taxable_miles": "Equal to Total Miles for most filers. Exempt miles (off-highway, agricultural, etc.) reduce this but require detailed records per state's exemption rules.",
+    "taxable_gallons": "round(Total Miles ÷ Fleet MPG) — whole gallon, half-up.",
+    "tax_paid_gallons": "Total gallons purchased in that state where state fuel tax was paid at the pump. Comes from fuel-card transaction records.",
+    "net_taxable_gallons": "Taxable Gallons − Tax Paid Gallons. Positive = you owe additional tax, negative = state owes you a credit.",
+    "tax_due": "round_half_up(Net Taxable Gallons × Tax Rate, 2). Sign convention: positive = owe state, negative = credit.",
+    "total_balance": "Sum across all jurisdictions. Positive number = total tax owed to base state, negative = refund/credit."
+  },
+  "surcharge_states": {
+    "_explanation": "Some states impose a surcharge IN ADDITION to the base fuel tax. The surcharge is reported on a SEPARATE LINE on the IFTA return, calculated on TAXABLE GALLONS (not net), with no tax-paid credit (surcharge isn't collected at the pump).",
+    "KY": {
+      "surcharge_rate_2026Q1": 0.1050,
+      "note": "Kentucky base diesel + Kentucky Surcharge line. Surcharge applies to taxable gallons.",
+      "verified": "MENSHIKOV LLC Q4 2025 CDTFA filing"
+    },
+    "VA": {
+      "surcharge_rate_2026Q1": 0.1430,
+      "note": "Virginia base diesel + Virginia Surcharge line. Surcharge applies to taxable gallons.",
+      "verified": "MENSHIKOV LLC Q4 2025 CDTFA filing"
+    },
+    "IN_not_surcharge": "Indiana DOES have a 'SurChg' row in the IFTA matrix, but only for PROPANE (LPG) — not diesel. For diesel filers, Indiana's $0.6100 rate is reported as a single line with no separate surcharge."
+  },
+  "special_states": {
+    "OR": {
+      "category": "weight_mile_tax",
+      "ifta_rate": 0.0000,
+      "note": "Oregon does NOT collect fuel tax through IFTA. It charges a Weight-Mile Tax (WMT) filed directly with ODOT Commerce & Compliance Division. IFTA rate for OR is 0.00, so 'tax_due' on the IFTA return for OR is always $0. However, miles in OR DO count toward fleet MPG, and gallons purchased in OR count toward tax-paid totals (just produce zero credit since rate is 0).",
+      "separate_filing_required": true,
+      "agency": "Oregon DOT Commerce & Compliance — oregontruckingonline.com"
+    },
+    "NY": {
+      "category": "highway_use_tax",
+      "ifta_rate_normal": true,
+      "note": "New York charges a separate Highway Use Tax (HUT) on top of IFTA, for vehicles ≥18,000 lbs gross weight. HUT is filed quarterly with NY Department of Taxation and Finance and is INDEPENDENT of IFTA.",
+      "separate_filing_required": true,
+      "agency": "NY DTF — tax.ny.gov/hut"
+    },
+    "NM": {
+      "category": "weight_distance_tax",
+      "ifta_rate_normal": true,
+      "note": "New Mexico has a Weight Distance Tax (WDT) filed with NM TRD, for vehicles with declared gross weight ≥26,001 lbs. Separate from IFTA.",
+      "separate_filing_required": true,
+      "agency": "NM Taxation and Revenue Department — tax.newmexico.gov"
+    },
+    "KY_KYU": {
+      "category": "weight_distance_tax",
+      "state": "KY",
+      "note": "Kentucky Weight-Distance Tax (KYU) — separate from IFTA, separate from KY surcharge. For vehicles ≥59,999 lbs. Filed with KY Department of Revenue quarterly. KYU number is required for those vehicles in addition to IFTA decals.",
+      "agency": "KY DOR — drive.ky.gov"
+    },
+    "non_ifta_jurisdictions": {
+      "list": ["AK", "HI", "DC", "YT", "NT", "NU"],
+      "note": "Alaska, Hawaii, Washington DC, Yukon, Northwest Territories, and Nunavut are NOT IFTA members. Miles in those jurisdictions are not reported on the IFTA return."
+    }
+  },
+  "recordkeeping": {
+    "retention_years": 4,
+    "required_records": [
+      "Distance records (per trip or per vehicle per jurisdiction)",
+      "Fuel receipts (paper or electronic) with date, location, gallons, price",
+      "Bulk-fuel inventory records (if applicable)",
+      "Mileage logs from ELDs/AOBRDs/manual"
+    ],
+    "audit_triggers": [
+      "Unusually low or high fleet MPG",
+      "Tax-paid gallons that don't match fuel receipts",
+      "Inconsistent state-to-state mileage patterns",
+      "Missing returns or late filings"
+    ],
+    "auditor_authority": "Base state can audit on behalf of all IFTA jurisdictions. Audits typically cover the 4-year retention window."
+  },
+  "rate_matrix": {
+    "source": "https://www.iftach.org/taxmatrix/charts/<NQ20YY>.csv",
+    "update_cadence": "Updated quarterly. Some states change rates mid-quarter — the matrix is authoritative.",
+    "fuel_types_supported": ["Gasoline", "Special Diesel", "Gasohol", "Propane", "LNG", "CNG", "Ethanol", "Methanol", "E-85", "M-85", "A55", "Biodiesel", "Electricity", "Hydrogen", "Hythane"],
+    "diesel_column": "Special Diesel (column index 1, zero-indexed after jurisdiction+currency)"
+  },
+  "common_errors_and_fixes": {
+    "MPG_too_low": "Check for: (1) duplicate fuel rows, (2) gallons reported in liters/imp. gallons, (3) miles missing for one or more trucks.",
+    "MPG_too_high": "Check for: (1) duplicate mileage rows, (2) fuel purchased on a personal card not in the report, (3) miles double-counted between trip sheets and ELD.",
+    "negative_state_miles": "Should never happen. Indicates a sign error or correction-entry treated as data.",
+    "fuel_in_state_with_no_miles": "Possible if truck fueled at a border stop without entering the state. Verify the fuel-card location vs. ELD trace.",
+    "missing_rate": "If a state has miles but rate is 0, re-fetch the matrix (--refresh-rates). If still missing, the jurisdiction may be non-IFTA.",
+    "wrong_base_state_in_PDF": "The base state listed on the gov-portal cover sheet must match the carrier's IFTA license. Mismatched returns will be rejected.",
+    "surcharge_omitted": "If filing in California and KY or VA had taxable miles, you MUST add the separate 'Kentucky Surcharge' / 'Virginia Surcharge' line. Forgetting it leads to underpayment + interest assessment."
+  },
+  "kentucky_dor_filing": {
+    "agency": "Kentucky Department of Revenue (KY DOR) — Motor Carrier Section",
+    "license_program": "Kentucky Transportation Cabinet, drive.ky.gov/motor-carriers/",
+    "ifta_portal_hint": "Kentucky has its own e-file system. Carrier logs in with KY IFTA account credentials to enter the Jurisdiction Summary and submit.",
+    "kyu_distinction": "KYU = Kentucky Weight Distance Tax. SEPARATE from IFTA. Required for vehicles with declared gross weight >59,999 lbs that operate on Kentucky highways. Filed quarterly with KY DOR on its own form. Has nothing to do with the IFTA tax surcharge.",
+    "ky_surcharge_for_home_state_filer": "A KY-based fleet that runs in Kentucky has both a Kentucky base-tax line AND a Kentucky Surcharge line on its OWN home-state return. Do not omit the surcharge just because Kentucky is the base state — the surcharge applies to taxable gallons regardless.",
+    "filing_steps": [
+      "1. Login to KY DOR IFTA e-file system with carrier account",
+      "2. Select the open quarter",
+      "3. Enter Jurisdiction Summary line-by-line (or upload IFTA-standard CSV if supported)",
+      "4. Add Kentucky Surcharge line whenever taxable miles in KY > 0 (always true for KY-based fleet)",
+      "5. Add other surcharge lines (VA) if applicable",
+      "6. Verify computed total matches your pipeline total",
+      "7. Submit; save the filing confirmation PDF",
+      "8. Pay via ACH; save the payment confirmation PDF",
+      "9. If any truck >59,999 lbs, file the SEPARATE KYU return"
+    ],
+    "audit_oversight": "Because Kentucky is the base state, KY DOR runs the IFTA audit (sampling all jurisdictions). Records must be available IN Kentucky or made available there on request."
+  },
+  "cdtfa_california_filing": {
+    "portal": "https://onlineservices.cdtfa.ca.gov/_/",
+    "account_format": "9-digit account number, e.g. 238-929600",
+    "online_filing": "Login → File a Return → IFTA Carrier Tax → enter the Jurisdiction Summary table line-by-line (or upload CSV in CDTFA format).",
+    "payment": "ACH debit, ACH credit, or credit card (with surcharge). Payment confirmation is separate from filing confirmation.",
+    "eft_required_threshold_usd": 20000,
+    "support_phone": "1-800-400-7115",
+    "filing_steps": [
+      "1. Login to onlineservices.cdtfa.ca.gov",
+      "2. Select the IFTA Carrier Tax account",
+      "3. Click 'File a Return' for the open quarter",
+      "4. Enter Jurisdiction Summary: one row per state, with Surcharge rows for KY and VA when applicable",
+      "5. Verify the system-computed total matches your pipeline total",
+      "6. Submit → save filing confirmation PDF",
+      "7. Pay via ACH or credit card (separate confirmation)",
+      "8. Save both PDFs to MyTruck/ for the audit file"
+    ]
+  },
+  "fuel_types": {
+    "common": ["Diesel", "Gasoline", "Gasohol", "Propane (LPG)", "LNG", "CNG"],
+    "rare_for_long_haul": ["Ethanol", "Methanol", "E-85", "M-85", "A55", "Biodiesel", "Electricity", "Hydrogen", "Hythane"],
+    "dyed_diesel": "Off-highway / agricultural diesel (red-dyed). NOT subject to highway fuel tax — DO NOT report dyed-diesel gallons on the IFTA return. Highway use of dyed diesel is a federal violation."
+  },
+  "exempt_fuel_and_miles": {
+    "off_highway_miles": "Miles driven off public highway (e.g. private yards, agricultural fields) may be claimed as exempt by some jurisdictions. Requires detailed mileage records per state's exemption rules.",
+    "agricultural_use": "Some states exempt agricultural-use miles. Requires written certification.",
+    "fuel_tax_refunds": "Fuel tax paid on exempt-use fuel (e.g. reefer fuel) can be claimed via the state's refund procedure — NOT on IFTA.",
+    "rule_of_thumb": "If unsure whether a mile is exempt, REPORT it. Conservative reporting reduces audit risk."
+  },
+  "irp_vs_ifta": {
+    "irp_definition": "International Registration Plan — separate program for apportioned vehicle registration (license plates) based on miles per jurisdiction. Filed annually with base state.",
+    "ifta_vs_irp": "IRP = vehicle registration based on miles. IFTA = fuel tax based on miles + fuel. Both apportion across jurisdictions but separate filings.",
+    "irp_filing_year": "Calendar year. IRP renewal usually due Dec 31 of the prior year for the upcoming year.",
+    "common_misconception": "Filing IFTA does NOT cover IRP. They are separate compliance obligations."
+  },
+  "audit_process": {
+    "audit_jurisdiction": "Base state conducts the audit on behalf of all IFTA jurisdictions.",
+    "audit_period": "Usually 4 years (the record retention window). Can extend if fraud is suspected.",
+    "records_required": [
+      "Distance records (per-trip or summarized; ELD/AOBRD logs preferred)",
+      "Fuel receipts (paper or electronic) with date, location, gallons, price",
+      "Bulk fuel records if applicable",
+      "Mileage source documents (trip sheets, GPS logs)",
+      "Federal Form 2290 (Heavy Highway Use Tax) — confirms vehicle weight class"
+    ],
+    "audit_assessment": "If records are incomplete, the auditor may impose an estimated MPG (typically 4.0 mpg — punitive) and reassess tax.",
+    "appeal_window": "30 days from audit assessment notice. Each jurisdiction has its own appeal process.",
+    "common_findings": [
+      "Missing fuel receipts → disallowed tax-paid credit",
+      "Incomplete mileage records → estimated MPG (usually higher tax)",
+      "Dyed-diesel reported on IFTA → reclassified, penalty",
+      "Surcharge omitted on KY/VA → assessed plus interest"
+    ]
+  },
+  "ifta_license_year": {
+    "license_period": "Calendar year (January 1 – December 31).",
+    "decals": "Two decals per qualified vehicle, one each side of cab. Display year matches license year.",
+    "renewal": "Base state issues renewal applications in October–November for the upcoming year. Late renewals can incur penalties.",
+    "decals_expire": "December 31. Vehicles operating in January without renewed decals risk citation."
+  },
+  "common_filer_mistakes": [
+    "Forgetting the KY or VA surcharge line when those states have taxable miles.",
+    "Filing Oregon at a non-zero rate (Oregon IFTA rate is $0 — weight-mile tax is separate).",
+    "Reporting dyed-diesel gallons as tax-paid fuel.",
+    "Skipping a quarterly return with zero activity (still must file).",
+    "Forgetting to separately file New York HUT, New Mexico WDT, Kentucky KYU when applicable.",
+    "Forgetting IRP renewal (different program, different deadline).",
+    "Pay-then-forget: payment confirmation is separate from filing confirmation on CDTFA — both must complete.",
+    "Reporting miles in non-IFTA jurisdictions (AK, HI, DC, YT, NT, NU) on the IFTA return."
+  ],
+  "useful_links": {
+    "ifta_inc": "https://www.iftach.org/",
+    "ifta_rate_matrix": "https://www.iftach.org/taxmatrix4/",
+    "cdtfa_california": "https://www.cdtfa.ca.gov/",
+    "oregon_wmt_odot": "https://www.oregontruckingonline.com/",
+    "ny_hut": "https://www.tax.ny.gov/hut/",
+    "nm_wdt": "https://www.tax.newmexico.gov/businesses/motor-carriers/",
+    "ky_kyu": "https://drive.ky.gov/motor-carriers/"
+  }
+}
