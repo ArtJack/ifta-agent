@@ -525,6 +525,86 @@ def deliver(
             subprocess.run(["open", str(out_dir)], check=False)
 
 
+@main.command(name="eval")
+@click.option(
+    "--cases-dir",
+    "cases_dir",
+    default=None,
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="Directory of *.json eval cases. Defaults to ./evals/cases/.",
+)
+@click.option(
+    "--case",
+    "case_filter",
+    default=None,
+    help="Run only the case with this name (matches the 'name' field).",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Print full agent response for every case (not just failures).",
+)
+def eval_cmd(cases_dir: Path | None, case_filter: str | None, verbose: bool) -> None:
+    """Run the agent eval suite — grade cases under evals/cases/.
+
+    Each case runs the agent (review or ask) and asserts properties of the
+    response (must_mention, must_not_mention, total_tax_due, structural).
+    Use this before/after prompt or tool changes to catch regressions.
+    """
+    from ifta.eval import load_cases, run_case
+
+    cases = load_cases(cases_dir)
+    if case_filter:
+        cases = [c for c in cases if c.name == case_filter]
+    if not cases:
+        raise click.ClickException("No eval cases found.")
+
+    console.rule(f"[bold]IFTA Eval — {len(cases)} case(s)")
+    total_pass = total_fail = 0
+    total_cost = 0.0
+    total_time = 0.0
+
+    for case in cases:
+        console.print(f"\n[bold]▸ {case.name}[/]  [dim]({case.description})[/]")
+        result = run_case(case)
+        if result.error:
+            total_fail += 1
+            console.print(f"  [red]✗ ERROR[/] {result.error}")
+            continue
+
+        for a in result.assertions:
+            sym = "[green]✓[/]" if a.passed else "[red]✗[/]"
+            console.print(f"  {sym} {a.name}" + (f"  [dim]{a.detail}[/]" if a.detail else ""))
+
+        if result.passed:
+            total_pass += 1
+        else:
+            total_fail += 1
+
+        if result.metrics is not None:
+            total_cost += result.metrics.estimated_cost_usd
+            total_time += result.metrics.wall_time_seconds
+            console.print(
+                f"  [dim]cost=${result.metrics.estimated_cost_usd:.4f}  "
+                f"time={result.metrics.wall_time_seconds:.1f}s  "
+                f"tools={result.metrics.n_model_calls} calls[/]"
+            )
+
+        if verbose or not result.passed:
+            preview = result.response_text[:600]
+            console.print(f"  [dim]response preview:[/]\n  {preview}…")
+
+    console.rule("[bold]Eval summary")
+    sym = "[green]" if total_fail == 0 else "[red]"
+    console.print(
+        f"{sym}{total_pass} passed · {total_fail} failed[/]  "
+        f"[dim]· total cost=${total_cost:.4f}  total time={total_time:.1f}s[/]"
+    )
+    if total_fail:
+        raise click.exceptions.Exit(code=1)
+
+
 @main.command()
 def clients() -> None:
     """List all registered clients in data/clients/."""

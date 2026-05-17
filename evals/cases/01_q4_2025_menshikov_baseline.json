@@ -1,0 +1,32 @@
+{
+  "name": "q4_2025_menshikov_baseline",
+  "description": "Baseline review — Q4 2025 MENSHIKOV LLC. Must match $795.16 (the known CDTFA backtest) and surface KY+VA surcharge handling + Oregon WMT.",
+  "command": "review",
+  "quarter": "Q4-2025",
+  "client": "menshikov_llc",
+  "model": "claude-opus-4-7",
+  "effort": "low",
+  "max_tokens": 2048,
+  "assertions": {
+    "total_tax_due": 795.16,
+    "must_mention": [
+      "795.16",
+      "MENSHIKOV",
+      "KY",
+      "VA",
+      "Oregon"
+    ],
+    "must_not_mention": [
+      "DM EXPRESS",
+      "David"
+    ],
+    "min_summary_len": 120,
+    "min_issues": 1,
+    "structural": {
+      "has_summary": true,
+      "has_issues": true,
+      "has_filing_reminders": true,
+      "has_next_steps": true
+    }
+  }
+}

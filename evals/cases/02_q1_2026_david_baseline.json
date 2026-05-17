@@ -1,0 +1,31 @@
+{
+  "name": "q1_2026_david_baseline",
+  "description": "Baseline review — DM EXPRESS Q1 2026 multi-truck fleet. Must hit $3,216.33, surface KY surcharge (David always has KY miles), and call out California as biggest contributor.",
+  "command": "review",
+  "quarter": "Q1-2026",
+  "client": "dm_express",
+  "model": "claude-opus-4-7",
+  "effort": "low",
+  "max_tokens": 2048,
+  "assertions": {
+    "total_tax_due": 3216.33,
+    "must_mention": [
+      "3,216.33",
+      "DM EXPRESS",
+      "Kentucky",
+      "KY",
+      "California"
+    ],
+    "must_not_mention": [
+      "MENSHIKOV",
+      "Truck 800"
+    ],
+    "min_summary_len": 120,
+    "min_issues": 1,
+    "structural": {
+      "has_summary": true,
+      "has_filing_reminders": true,
+      "has_next_steps": true
+    }
+  }
+}
