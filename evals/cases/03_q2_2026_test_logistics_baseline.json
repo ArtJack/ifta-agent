@@ -1,0 +1,28 @@
+{
+  "name": "q2_2026_test_logistics_baseline",
+  "description": "Synthetic test client with profile='none'. Agent must produce a sensible review using only general IFTA rules — not hallucinate Menshikov or David thresholds. Also exercises the rate-fallback path (Q2-2026 falls back to cached Q1-2026 rates).",
+  "command": "review",
+  "quarter": "Q2-2026",
+  "client": "test_logistics",
+  "model": "claude-opus-4-7",
+  "effort": "low",
+  "max_tokens": 2048,
+  "assertions": {
+    "must_mention": [
+      "TEST LOGISTICS",
+      "MPG"
+    ],
+    "must_not_mention": [
+      "MENSHIKOV",
+      "DM EXPRESS",
+      "David",
+      "Truck 800"
+    ],
+    "min_summary_len": 100,
+    "structural": {
+      "has_summary": true,
+      "has_filing_reminders": true,
+      "has_next_steps": true
+    }
+  }
+}
