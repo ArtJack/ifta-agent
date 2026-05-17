@@ -51,6 +51,9 @@ ifta ask --quarter Q1-2026 "Why is California's tax so high?"
 # Interactive chat with full tool access
 ifta chat
 
+# Telegram intake bot (customers upload raw files, bot returns the packet)
+ifta telegram-bot
+
 # Just fetch tax rates for a quarter (cache only)
 ifta rates --quarter Q1-2026
 ```
@@ -64,6 +67,73 @@ Each agent command takes `--model` and `--effort`:
 | `--model` | `claude-opus-4-7` (default), `claude-sonnet-4-6`, `claude-haiku-4-5` | Opus = most precise. Haiku = cheap/fast Q&A. |
 | `--effort` | `low`, `medium` (default), `high`, `xhigh`, `max` | Thinking depth — higher = more thorough/expensive. |
 | `--max-tokens` | int | Output ceiling per call. Defaults: review 4096, ask 2048, chat 4096. |
+
+## Telegram Intake Bot
+
+The Telegram bot is the customer-facing intake layer. Customers upload raw
+mileage and fuel-card files; the bot saves them into the correct client inbox,
+runs preflight, runs the deterministic IFTA pipeline, runs the review agent,
+and sends back the customer packet.
+
+### Create the bot token
+
+1. Open Telegram and search for `@BotFather`.
+2. Send `/newbot`.
+3. Pick a display name, for example `Eugene IFTA Bot`.
+4. Pick a username ending in `bot`, for example `eugene_ifta_bot`.
+5. BotFather returns a token that looks like `123456789:ABC...`.
+6. Paste it into `.env`:
+
+```bash
+TELEGRAM_BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
+```
+
+Optional admin IDs:
+
+```bash
+TELEGRAM_ADMIN_USER_IDS=123456789
+```
+
+Run the bot:
+
+```bash
+ifta telegram-bot
+```
+
+### Approve a customer
+
+Ask the customer to open the bot and send `/id`. Add that numeric ID to the
+client registry:
+
+```json
+{
+  "client_id": "dm_express",
+  "telegram_user_ids": [123456789]
+}
+```
+
+Then the customer can use:
+
+```text
+/new Q2-2026
+```
+
+They upload CSV, Excel, or PDF files as Telegram documents. When the bot says
+preflight is clean, they send:
+
+```text
+/process
+```
+
+The bot sends back:
+
+- `ifta_portal.csv`
+- `ifta_review.xlsx`
+- `review_note.md`
+- one per-truck Excel file per truck
+
+If current-quarter rates are unavailable, the bot marks the packet as
+`REVIEW REQUIRED` and warns not to upload yet.
 
 ## Project layout
 

@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from anthropic import beta_tool
 
 from ifta.calc import IftaReturn, compute_per_truck_lines, compute_return
 from ifta.client import (
     ClientContext,
+    ClientRecord,
     get_client_record,
     load_client_context,
     load_registry,
@@ -358,15 +360,15 @@ def list_clients() -> str:
     return json.dumps(rows, indent=2)
 
 
-def _require_client(client_id: str) -> tuple[ClientContext, object]:
-    """Look up a registered client, return (synthetic_context, record) or raise."""
+def _require_client(client_id: str) -> ClientRecord:
+    """Look up a registered client or raise."""
     rec = get_client_record(PROJECT_ROOT, client_id)
     if rec is None:
         raise FileNotFoundError(
             f"Client '{client_id}' not registered. Known: "
             f"{list(load_registry(PROJECT_ROOT).keys())}"
         )
-    return None, rec  # type: ignore[return-value]
+    return rec
 
 
 @beta_tool
@@ -378,8 +380,8 @@ def get_client_profile(client_id: str) -> str:
     Args:
         client_id: Registry id or alias (e.g. "dm_express", "david", "menshikov").
     """
-    _, rec = _require_client(client_id)
-    p = rec.resolve_path("profile_path")  # type: ignore[union-attr]
+    rec = _require_client(client_id)
+    p = rec.resolve_path("profile_path")
     if p is None or not p.exists():
         return f"No profile.json on disk for client '{client_id}'."
     return p.read_text(encoding="utf-8")
@@ -395,25 +397,26 @@ def query_client_history(client_id: str, quarter: str | None = None) -> str:
         quarter: Optional quarter label, e.g. "Q4 2025" or "Q4-2025". Omit for
             a summary across all quarters.
     """
-    _, rec = _require_client(client_id)
-    p = rec.resolve_path("history_path")  # type: ignore[union-attr]
+    rec = _require_client(client_id)
+    p = rec.resolve_path("history_path")
     if p is None or not p.exists():
         return f"No history.json on disk for client '{client_id}'."
-    history = json.loads(p.read_text(encoding="utf-8"))
+    history_obj: object = json.loads(p.read_text(encoding="utf-8"))
 
     # History is either a list (Menshikov style) or a dict keyed by quarter
     # (DM Express style). Handle both.
-    if isinstance(history, list):
+    if isinstance(history_obj, list):
+        history_list = [f for f in history_obj if isinstance(f, dict)]
         if quarter:
             q_norm = quarter.upper().replace("-", " ").strip()
             matches = [
                 f
-                for f in history
+                for f in history_list
                 if f"{f.get('quarter', '').upper()} {f.get('year', '')}".strip() == q_norm
                 or f.get("quarter", "").upper() == q_norm
             ]
             return json.dumps(matches, indent=2)
-        summary = [
+        list_summary = [
             {
                 "quarter": f.get("quarter"),
                 "year": f.get("year"),
@@ -422,10 +425,13 @@ def query_client_history(client_id: str, quarter: str | None = None) -> str:
                 "fleet_mpg": f.get("fleet_mpg"),
                 "jurisdictions_count": len(f.get("jurisdictions") or []),
             }
-            for f in history
+            for f in history_list
         ]
-        return json.dumps(summary, indent=2)
+        return json.dumps(list_summary, indent=2)
 
+    if not isinstance(history_obj, dict):
+        return f"Unsupported history.json shape for client '{client_id}'."
+    history: dict[str, Any] = history_obj
     if quarter:
         norm = quarter.replace("-", " ").strip()
         if norm in history:
@@ -434,7 +440,7 @@ def query_client_history(client_id: str, quarter: str | None = None) -> str:
             if k.replace(" ", "").lower() == norm.replace(" ", "").lower():
                 return json.dumps(history[k], indent=2)
         return f"Quarter '{quarter}' not in history. Available: {list(history.keys())}"
-    summary = {
+    dict_summary = {
         q: {
             "trucks": data.get("trucks"),
             "states_count": len(data.get("states", [])),
@@ -444,7 +450,7 @@ def query_client_history(client_id: str, quarter: str | None = None) -> str:
         }
         for q, data in history.items()
     }
-    return json.dumps(summary, indent=2)
+    return json.dumps(dict_summary, indent=2)
 
 
 @beta_tool
@@ -456,8 +462,8 @@ def list_client_files(client_id: str) -> str:
     Args:
         client_id: Registry id or alias.
     """
-    _, rec = _require_client(client_id)
-    folder = rec.resolve_path("source_folder")  # type: ignore[union-attr]
+    rec = _require_client(client_id)
+    folder = rec.resolve_path("source_folder")
     if folder is None:
         return f"Client '{client_id}' has no source_folder configured."
     if not folder.exists():
@@ -478,7 +484,7 @@ def list_client_files(client_id: str) -> str:
                 items.append(f"  - {p.name} (xlsx) — couldn't read: {e}")
         else:
             items.append(f"  - {p.name} ({suffix.lstrip('.')})")
-    return f"Source files for {rec.name}:\n" + "\n".join(items)  # type: ignore[union-attr]
+    return f"Source files for {rec.name}:\n" + "\n".join(items)
 
 
 @beta_tool
@@ -600,8 +606,8 @@ def list_past_filings(client_id: str) -> str:
     Args:
         client_id: Registry id or alias.
     """
-    _, rec = _require_client(client_id)
-    folder = rec.resolve_path("source_folder")  # type: ignore[union-attr]
+    rec = _require_client(client_id)
+    folder = rec.resolve_path("source_folder")
     if folder is None:
         return f"Client '{client_id}' has no source_folder configured."
     if not folder.exists():
@@ -609,9 +615,7 @@ def list_past_filings(client_id: str) -> str:
     pdfs = sorted(p.name for p in folder.glob("*.pdf"))
     if not pdfs:
         return f"No PDF filings in {folder}."
-    return f"Past filings for {rec.name}:\n" + "\n".join(  # type: ignore[union-attr]
-        f"  - {p}" for p in pdfs
-    )
+    return f"Past filings for {rec.name}:\n" + "\n".join(f"  - {p}" for p in pdfs)
 
 
 @beta_tool
@@ -625,8 +629,8 @@ def read_past_filing(client_id: str, filename: str) -> str:
     """
     import pdfplumber
 
-    _, rec = _require_client(client_id)
-    folder = rec.resolve_path("source_folder")  # type: ignore[union-attr]
+    rec = _require_client(client_id)
+    folder = rec.resolve_path("source_folder")
     if folder is None:
         return f"Client '{client_id}' has no source_folder configured."
     path = folder / filename

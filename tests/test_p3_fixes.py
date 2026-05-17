@@ -19,7 +19,6 @@ from ifta.agent.prompts import SYSTEM_PROMPT
 from ifta.cli import _display_path, main
 from ifta.client import _context_from_metadata, quarter_key
 
-
 # ---------------------------------------------------------------------------
 # D-007 / D-008 — quarter format validation
 # ---------------------------------------------------------------------------
@@ -181,3 +180,4 @@ def test_system_prompt_includes_data_shape_check() -> None:
     assert "Data-shape sanity check" in SYSTEM_PROMPT
     assert "fleet size" in SYSTEM_PROMPT
     assert "client-identity mismatch" in SYSTEM_PROMPT
+    assert "DO NOT FILE" in SYSTEM_PROMPT

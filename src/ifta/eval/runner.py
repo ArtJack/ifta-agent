@@ -75,7 +75,7 @@ class EvalCase:
     source_path: Path | None = None
 
     @classmethod
-    def from_json(cls, path: Path) -> "EvalCase":
+    def from_json(cls, path: Path) -> EvalCase:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return cls(
             name=payload["name"],
