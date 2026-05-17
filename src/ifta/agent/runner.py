@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,6 +195,28 @@ def run_agent(
 # ---------------------------------------------------------------------------
 
 
+_CODE_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
+
+
+def _extract_review_json(text: str) -> dict[str, Any]:
+    """Pull the JSON object out of the agent's reply.
+
+    Models sometimes wrap output in ```json … ``` fences despite instructions,
+    or stick stray prose around the object. Strip fences first, then fall back
+    to the {…} braces. Raises ValueError if no valid object is recoverable.
+    """
+    candidate = text
+    fenced = _CODE_FENCE_RE.search(text)
+    if fenced:
+        candidate = fenced.group(1)
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError(f"no JSON object found in:\n{text}")
+    return json.loads(candidate[start : end + 1])
+
+
 def review(
     quarter: str,
     *,
@@ -204,7 +227,9 @@ def review(
 ) -> tuple[ReviewNote, AgentMetrics]:
     """Produce a structured pre-filing review for one quarter.
 
-    Returns (review_note, metrics).
+    Returns (review_note, metrics). Retries the agent call once if the first
+    response can't be parsed as JSON (caught ~10% of intermittent failures in
+    QA — models occasionally produce nearly-valid JSON with an unescaped char).
     """
     client_context = load_client_context(PROJECT_ROOT, quarter, client=client)
     prompt = REVIEW_PROMPT_TEMPLATE.format(
@@ -217,11 +242,31 @@ def review(
         max_tokens=max_tokens or DEFAULT_MAX_TOKENS["review"],
         effort=effort,
     )
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise RuntimeError(f"Agent did not return JSON. Raw response:\n{text}")
-    payload = json.loads(text[start : end + 1])
+    try:
+        payload = _extract_review_json(text)
+    except (ValueError, json.JSONDecodeError) as first_err:
+        retry_prompt = (
+            prompt
+            + "\n\nIMPORTANT: Your previous response was not valid JSON. Return "
+            "ONLY the JSON object specified — no markdown fences, no preamble, "
+            "no trailing commentary. Escape any quotes or newlines inside string "
+            "values."
+        )
+        retry_text, _, retry_metrics = run_agent(
+            retry_prompt,
+            model=model,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS["review"],
+            effort=effort,
+        )
+        metrics.merge(retry_metrics)
+        try:
+            payload = _extract_review_json(retry_text)
+        except (ValueError, json.JSONDecodeError) as retry_err:
+            raise RuntimeError(
+                f"Agent failed to produce valid JSON after retry.\n"
+                f"First error: {first_err}\nRetry error: {retry_err}\n"
+                f"Last response:\n{retry_text}"
+            ) from retry_err
     return review_note_from_payload(payload), metrics
 
 
@@ -298,12 +343,31 @@ def chat_loop(
 
 
 def write_review_md(
-    note: ReviewNote, out_path: Path, *, metrics: AgentMetrics | None = None
+    note: ReviewNote,
+    out_path: Path,
+    *,
+    metrics: AgentMetrics | None = None,
+    overwrite: bool = False,
 ) -> Path:
-    """Write a ReviewNote to a Markdown file with optional agent-run metrics."""
+    """Write a ReviewNote to a Markdown file with optional agent-run metrics.
+
+    If `out_path` already exists and `overwrite` is False (the default), the
+    existing file is archived to `<stem>.archive.<ISO-timestamp><suffix>` in
+    the same directory before the new file is written. This stops re-runs from
+    silently destroying the previous (possibly already-delivered) review note.
+    Pass `overwrite=True` to keep the old behaviour.
+    """
+    from datetime import datetime
+
     from ifta.agent.metrics import format_metrics_md
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists() and not overwrite:
+        ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        archive = out_path.with_name(
+            f"{out_path.stem}.archive.{ts}{out_path.suffix}"
+        )
+        out_path.rename(archive)
     lines = ["# IFTA Review Note", "", "## Summary", note.summary, ""]
     if note.issues:
         lines += ["## Issues", *(f"- {format_review_item(x)}" for x in note.issues), ""]

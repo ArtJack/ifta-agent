@@ -50,6 +50,16 @@ class AgentMetrics:
         self.cache_creation_tokens += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
         self.n_model_calls += 1
 
+    def merge(self, other: "AgentMetrics") -> None:
+        """Add another run's totals into this one (e.g. for parse-retry path)."""
+        self.wall_time_seconds += other.wall_time_seconds
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.cache_creation_tokens += other.cache_creation_tokens
+        self.n_model_calls += other.n_model_calls
+        self.recompute_cost()
+
     def recompute_cost(self) -> None:
         """Recalculate estimated_cost_usd from the current token totals."""
         pricing = MODEL_PRICING.get(self.model)

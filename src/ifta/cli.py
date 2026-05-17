@@ -571,9 +571,28 @@ def onboard(
     import json
     import re
 
+    from ifta.client import normalize_client_id
+
     norm = re.sub(r"[^a-z0-9]+", "_", client_id.strip().lower()).strip("_")
     if not norm:
         raise click.ClickException("client_id must contain at least one alphanumeric character.")
+
+    # Block alias/id collisions: if `norm` already resolves to a registered
+    # client (either as that client's id or one of its aliases), refuse and
+    # point the user at the existing entry. Without this, `ifta onboard david`
+    # would shadow `dm_express` and route future --client lookups to an empty
+    # stub, silently corrupting per-client data.
+    registry = load_registry(PROJECT_ROOT)
+    resolved = normalize_client_id(client_id, PROJECT_ROOT)
+    if resolved in registry:
+        existing = registry[resolved]
+        raise click.ClickException(
+            f"'{client_id}' already resolves to registered client "
+            f"'{existing.client_id}' (name={existing.name!r}, "
+            f"aliases={list(existing.aliases)}). "
+            f"Pick a different id, or edit data/clients/{existing.client_id}/ "
+            f"directly to update."
+        )
 
     client_dir = PROJECT_ROOT / "data" / "clients" / norm
     if client_dir.exists() and (client_dir / "client.json").exists():
