@@ -7,7 +7,6 @@ D-015: write_review_md archives existing files instead of overwriting
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,6 @@ from ifta.agent.runner import (
     write_review_md,
 )
 from ifta.cli import main
-
 
 # ---------------------------------------------------------------------------
 # D-011 — alias collision detection in onboard

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -147,14 +147,16 @@ def _build_per_truck_sheet(ws: Worksheet, ret: IftaReturn, data: CleanData) -> N
     ws["B4"].number_format = MONEY_FMT
 
     miles_by_tk_st: dict[tuple[str, str], float] = {}
-    for r in data.miles:
-        miles_by_tk_st[(r.truck_id, r.state)] = (
-            miles_by_tk_st.get((r.truck_id, r.state), 0.0) + r.miles
+    for mileage_record in data.miles:
+        miles_by_tk_st[(mileage_record.truck_id, mileage_record.state)] = (
+            miles_by_tk_st.get((mileage_record.truck_id, mileage_record.state), 0.0)
+            + mileage_record.miles
         )
     gallons_by_tk_st: dict[tuple[str, str], float] = {}
-    for r in data.fuel:
-        gallons_by_tk_st[(r.truck_id, r.state)] = (
-            gallons_by_tk_st.get((r.truck_id, r.state), 0.0) + r.gallons
+    for fuel_record in data.fuel:
+        gallons_by_tk_st[(fuel_record.truck_id, fuel_record.state)] = (
+            gallons_by_tk_st.get((fuel_record.truck_id, fuel_record.state), 0.0)
+            + fuel_record.gallons
         )
 
     # Union of states each truck visits, sorted alphabetically — matches
@@ -170,15 +172,15 @@ def _build_per_truck_sheet(ws: Worksheet, ret: IftaReturn, data: CleanData) -> N
             _set_header(ws.cell(row=header_row, column=col + offset, value=label))
 
         for i, s in enumerate(states):
-            r = data_start + i
+            row_idx = data_start + i
             m = miles_by_tk_st.get((t.truck_id, s), 0.0)
             g = gallons_by_tk_st.get((t.truck_id, s), 0.0)
-            ws.cell(row=r, column=col, value=t.truck_id)
-            ws.cell(row=r, column=col + 1, value=s)
-            ws.cell(row=r, column=col + 2, value=round(m, 2) if m else None)
-            ws.cell(row=r, column=col + 3, value=round(g, 3) if g else None)
+            ws.cell(row=row_idx, column=col, value=t.truck_id)
+            ws.cell(row=row_idx, column=col + 1, value=s)
+            ws.cell(row=row_idx, column=col + 2, value=round(m, 2) if m else None)
+            ws.cell(row=row_idx, column=col + 3, value=round(g, 3) if g else None)
             if m and g:
-                ws.cell(row=r, column=col + 4, value=round(m / g, 2))
+                ws.cell(row=row_idx, column=col + 4, value=round(m / g, 2))
 
         total_row = data_start + len(states)
         ws.cell(row=total_row, column=col + 1, value="TOTAL").font = TOTAL_FONT
@@ -205,21 +207,21 @@ def _build_per_truck_sheet(ws: Worksheet, ret: IftaReturn, data: CleanData) -> N
         _set_header(ws.cell(row=header_row, column=sum_col + i, value=h))
 
     for i, line in enumerate(ret.lines):
-        r = data_start + i
-        ws.cell(row=r, column=sum_col, value=line.state)
-        ws.cell(row=r, column=sum_col + 1, value="Surcharge" if line.is_surcharge else "")
-        ws.cell(row=r, column=sum_col + 2, value=int(round(line.miles)))
-        ws.cell(row=r, column=sum_col + 3, value=int(round(line.miles)))
+        row_idx = data_start + i
+        ws.cell(row=row_idx, column=sum_col, value=line.state)
+        ws.cell(row=row_idx, column=sum_col + 1, value="Surcharge" if line.is_surcharge else "")
+        ws.cell(row=row_idx, column=sum_col + 2, value=int(round(line.miles)))
+        ws.cell(row=row_idx, column=sum_col + 3, value=int(round(line.miles)))
         ws.cell(
-            row=r,
+            row=row_idx,
             column=sum_col + 4,
             value=0.0 if line.is_surcharge else round(ret.fleet_mpg, 2),
         )
-        ws.cell(row=r, column=sum_col + 5, value=int(round(line.taxable_gal)))
-        ws.cell(row=r, column=sum_col + 6, value=int(round(line.tax_paid_gal)))
-        ws.cell(row=r, column=sum_col + 7, value=int(round(line.net_taxable_gal)))
-        ws.cell(row=r, column=sum_col + 8, value=round(line.rate, 4))
-        c = ws.cell(row=r, column=sum_col + 9, value=round(line.tax_due, 2))
+        ws.cell(row=row_idx, column=sum_col + 5, value=int(round(line.taxable_gal)))
+        ws.cell(row=row_idx, column=sum_col + 6, value=int(round(line.tax_paid_gal)))
+        ws.cell(row=row_idx, column=sum_col + 7, value=int(round(line.net_taxable_gal)))
+        ws.cell(row=row_idx, column=sum_col + 8, value=round(line.rate, 4))
+        c = ws.cell(row=row_idx, column=sum_col + 9, value=round(line.tax_due, 2))
         c.number_format = MONEY_FMT
 
     sum_total_row = data_start + len(ret.lines)
@@ -326,10 +328,17 @@ def _build_review_sheet(
         items = review.get(key) if isinstance(review, dict) else None
         if not items:
             continue
+        from ifta.agent import format_review_item
+
         ws.cell(row=r, column=1, value=section_label).font = TOTAL_FONT
         r += 1
-        for item in items:
-            ws.cell(row=r, column=1, value=f"• {item}").alignment = Alignment(wrap_text=True)
+        review_items = items if isinstance(items, list) else [items]
+        for item in review_items:
+            ws.cell(
+                row=r,
+                column=1,
+                value=f"• {format_review_item(cast(Any, item))}",
+            ).alignment = Alignment(wrap_text=True)
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
             r += 1
         r += 1

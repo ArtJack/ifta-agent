@@ -33,3 +33,7 @@ htmlcov/
 *.log
 scratch/
 tmp/
+
+# Telegram/customer runtime uploads and generated packets
+inbox/*/
+outputs/*/

@@ -19,6 +19,7 @@ dependencies = [
     "pandas>=2.0",
     "pdfplumber>=0.11",
     "python-dotenv>=1.0",
+    "python-telegram-bot[ext]>=22",
     "requests>=2.30",
     "rich>=13.0",
 ]

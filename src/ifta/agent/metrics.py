@@ -50,7 +50,7 @@ class AgentMetrics:
         self.cache_creation_tokens += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
         self.n_model_calls += 1
 
-    def merge(self, other: "AgentMetrics") -> None:
+    def merge(self, other: AgentMetrics) -> None:
         """Add another run's totals into this one (e.g. for parse-retry path)."""
         self.wall_time_seconds += other.wall_time_seconds
         self.input_tokens += other.input_tokens

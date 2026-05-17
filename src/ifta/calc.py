@@ -111,14 +111,16 @@ def compute_per_truck_lines(
 
     # Group raw inputs by (truck, state)
     miles_by_tk_st: dict[tuple[str, str], float] = {}
-    for r in data.miles:
-        miles_by_tk_st[(r.truck_id, r.state)] = (
-            miles_by_tk_st.get((r.truck_id, r.state), 0.0) + r.miles
+    for mileage_record in data.miles:
+        miles_by_tk_st[(mileage_record.truck_id, mileage_record.state)] = (
+            miles_by_tk_st.get((mileage_record.truck_id, mileage_record.state), 0.0)
+            + mileage_record.miles
         )
     gallons_by_tk_st: dict[tuple[str, str], float] = {}
-    for r in data.fuel:
-        gallons_by_tk_st[(r.truck_id, r.state)] = (
-            gallons_by_tk_st.get((r.truck_id, r.state), 0.0) + r.gallons
+    for fuel_record in data.fuel:
+        gallons_by_tk_st[(fuel_record.truck_id, fuel_record.state)] = (
+            gallons_by_tk_st.get((fuel_record.truck_id, fuel_record.state), 0.0)
+            + fuel_record.gallons
         )
 
     truck_ids = sorted(

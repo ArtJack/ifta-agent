@@ -8,6 +8,7 @@
   "source_folder": "../MyTruck",
   "profile_path": "profile.json",
   "history_path": "history.json",
+  "telegram_user_ids": [],
   "active": false,
   "notes": "Retired reference carrier; not an active filing customer. 16 quarters of CDTFA filings retained as a real end-to-end IFTA Quarterly Return example."
 }
