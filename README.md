@@ -107,8 +107,27 @@ but cannot start uploads, list clients, upload files, process returns, or see
 your customer registry. The bot also only works in private Telegram chats so
 customer files are not handled in groups by accident.
 
-Ask each customer to open the bot in a private chat and send `/id`. Add that
-numeric ID only to that customer's registry file:
+Make sure your own Telegram ID is in `.env`:
+
+```bash
+TELEGRAM_ADMIN_USER_IDS=123456789
+```
+
+Then the easiest customer flow is:
+
+```text
+Customer: /request DM Express
+Admin:    /approve 555111222 dm_express
+```
+
+When a customer sends `/request [company]`, the bot messages every admin with
+their Telegram ID and an `/approve ...` command you can paste back into the bot.
+Approvals are saved on the Mac mini in `data/telegram_access.json`, which is
+ignored by Git so customer Telegram IDs are not pushed to GitHub.
+
+The older manual method still works too. Ask each customer to open the bot in a
+private chat and send `/id`, then add that numeric ID only to that customer's
+registry file:
 
 ```json
 {

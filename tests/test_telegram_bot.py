@@ -18,9 +18,11 @@ from ifta.telegram_bot import (
     BotConfig,
     DeliveryBlockedError,
     Submission,
+    approve_telegram_user,
     authorize_submission_access,
     check_client_identity,
     clients_for_telegram_user,
+    load_telegram_access,
     parse_user_ids,
     prepare_submission_inbox,
     resolve_authorized_client,
@@ -88,6 +90,22 @@ def test_clients_for_telegram_user_reads_registry(tmp_path: Path) -> None:
     assert [rec.client_id for rec in matches] == ["dm_express"]
 
 
+def test_approve_telegram_user_writes_local_allowlist(tmp_path: Path) -> None:
+    _write_client(tmp_path, "dm_express", aliases=["david"], telegram_user_ids=[])
+
+    rec = approve_telegram_user(
+        project_root=tmp_path,
+        user_id=111,
+        requested_client="david",
+    )
+
+    assert rec.client_id == "dm_express"
+    assert load_telegram_access(tmp_path) == {"dm_express": {111}}
+    assert [match.client_id for match in clients_for_telegram_user(tmp_path, 111)] == [
+        "dm_express"
+    ]
+
+
 def test_resolve_authorized_client_allows_registered_user(tmp_path: Path) -> None:
     _write_client(tmp_path, "dm_express", aliases=["david"], telegram_user_ids=[111])
 
@@ -143,7 +161,8 @@ def test_admin_can_choose_any_client(tmp_path: Path) -> None:
 
 
 def test_authorize_submission_access_rechecks_existing_session(tmp_path: Path) -> None:
-    _write_client(tmp_path, "dm_express", telegram_user_ids=[111])
+    _write_client(tmp_path, "dm_express", telegram_user_ids=[])
+    approve_telegram_user(project_root=tmp_path, user_id=111, requested_client="dm_express")
     submission = Submission(
         client_id="dm_express",
         client_name="DM EXPRESS INC",
