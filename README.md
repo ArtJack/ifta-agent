@@ -102,8 +102,13 @@ ifta telegram-bot
 
 ### Approve a customer
 
-Ask the customer to open the bot and send `/id`. Add that numeric ID to the
-client registry:
+The bot is closed by default: a random Telegram user can see their own `/id`,
+but cannot start uploads, list clients, upload files, process returns, or see
+your customer registry. The bot also only works in private Telegram chats so
+customer files are not handled in groups by accident.
+
+Ask each customer to open the bot in a private chat and send `/id`. Add that
+numeric ID only to that customer's registry file:
 
 ```json
 {
@@ -111,6 +116,10 @@ client registry:
   "telegram_user_ids": [123456789]
 }
 ```
+
+One customer can be attached to one client, or to multiple clients if they
+manage several companies. A non-admin user cannot choose or process another
+client unless their Telegram ID is listed in that client's `client.json`.
 
 Then the customer can use:
 
