@@ -69,6 +69,7 @@ from ifta.validator import Finding, format_findings, validate
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SUPPORTED_UPLOAD_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".pdf"}
+TELEGRAM_ACCESS_FILE = Path("data") / "telegram_access.json"
 
 
 class AuthorizationError(RuntimeError):
@@ -214,12 +215,88 @@ def load_bot_config(project_root: Path = PROJECT_ROOT) -> BotConfig:
     )
 
 
+def telegram_access_path(project_root: Path) -> Path:
+    """Local runtime allowlist written by /approve; intentionally git-ignored."""
+    return project_root / TELEGRAM_ACCESS_FILE
+
+
+def load_telegram_access(project_root: Path) -> dict[str, set[int]]:
+    """Load local Telegram approvals grouped by client id."""
+    path = telegram_access_path(project_root)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    clients_payload = payload.get("clients", payload)
+    if not isinstance(clients_payload, dict):
+        return {}
+
+    access: dict[str, set[int]] = {}
+    for raw_client_id, raw_ids in clients_payload.items():
+        if not isinstance(raw_ids, list):
+            continue
+        client_id = normalize_client_id(str(raw_client_id), project_root)
+        ids: set[int] = set()
+        for raw_id in raw_ids:
+            try:
+                ids.add(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        if ids:
+            access[client_id] = ids
+    return access
+
+
+def write_telegram_access(project_root: Path, access: dict[str, set[int]]) -> Path:
+    """Persist local Telegram approvals in a stable JSON shape."""
+    path = telegram_access_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "clients": {
+            client_id: sorted(ids)
+            for client_id, ids in sorted(access.items())
+            if ids
+        }
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def client_telegram_user_ids(project_root: Path, rec: ClientRecord) -> set[int]:
+    """All Telegram ids allowed for a client from registry plus local approvals."""
+    return set(rec.telegram_user_ids) | load_telegram_access(project_root).get(rec.client_id, set())
+
+
+def approve_telegram_user(
+    *,
+    project_root: Path,
+    user_id: int,
+    requested_client: str,
+) -> ClientRecord:
+    """Approve a Telegram user for one client through the local runtime allowlist."""
+    registry = load_registry(project_root)
+    client_id = normalize_client_id(requested_client, project_root)
+    rec = registry.get(client_id)
+    if rec is None:
+        raise AuthorizationError(
+            f"Unknown client {requested_client!r}. Registered: {', '.join(registry)}"
+        )
+    access = load_telegram_access(project_root)
+    access.setdefault(rec.client_id, set()).add(user_id)
+    write_telegram_access(project_root, access)
+    return rec
+
+
 def clients_for_telegram_user(project_root: Path, user_id: int) -> list[ClientRecord]:
     """Return registered clients that explicitly allow this Telegram user id."""
     return [
         rec
         for rec in load_registry(project_root).values()
-        if user_id in rec.telegram_user_ids
+        if user_id in client_telegram_user_ids(project_root, rec)
     ]
 
 
@@ -273,7 +350,7 @@ def authorize_submission_access(
     rec = load_registry(project_root).get(normalize_client_id(submission.client_id, project_root))
     if rec is None:
         raise AuthorizationError("This upload session is for a client that is no longer registered.")
-    if user_id in admin_user_ids or user_id in rec.telegram_user_ids:
+    if user_id in admin_user_ids or user_id in client_telegram_user_ids(project_root, rec):
         return rec
     raise AuthorizationError(
         "This upload session is no longer authorized for your Telegram id. "
@@ -704,6 +781,31 @@ async def _reply_private_chat_error(update: Update) -> bool:
     return True
 
 
+def _telegram_user_label(update: Update) -> str:
+    user = update.effective_user
+    if user is None:
+        return "Unknown Telegram user"
+    parts = [part for part in [user.first_name, user.last_name] if part]
+    name = " ".join(parts) or "Unknown name"
+    username = f"@{user.username}" if user.username else "no username"
+    return f"{name} ({username})"
+
+
+async def _notify_admins(
+    context: ContextTypes.DEFAULT_TYPE,
+    config: BotConfig,
+    text: str,
+) -> int:
+    delivered = 0
+    for admin_id in config.admin_user_ids:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=text)
+        except Exception:
+            continue
+        delivered += 1
+    return delivered
+
+
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     user_id = _effective_user_id(update)
@@ -729,8 +831,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not assigned and not is_admin:
         await update.message.reply_text(
             "Hi. IFTA bot is installed, but your Telegram id is not approved yet.\n"
-            f"Send this id to Eugene: {user_id}\n\n"
-            "After Eugene adds it to the client profile, use /new Q2-2026."
+            f"Your Telegram id is: {user_id}\n\n"
+            "To request access, send:\n"
+            "/request Your Company Name\n\n"
+            "After Eugene approves it, use /new Q2-2026."
         )
         return
 
@@ -745,8 +849,112 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/status - check uploaded files\n"
         "/process - run IFTA calculation and review\n"
         "/cancel - cancel current upload session\n"
+        "/request [company] - ask Eugene for access\n"
         "/id - show your Telegram user id"
     )
+
+
+async def request_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    config: BotConfig = context.application.bot_data["config"]
+    user_id = _effective_user_id(update)
+    if update.message is None or user_id is None:
+        return
+    if await _reply_private_chat_error(update):
+        return
+
+    assigned = clients_for_telegram_user(config.project_root, user_id)
+    if assigned:
+        await update.message.reply_text(
+            "You already have access to: "
+            + ", ".join(f"{rec.client_id} ({rec.name})" for rec in assigned)
+        )
+        return
+
+    requested = " ".join(context.args or []).strip()
+    registry = load_registry(config.project_root)
+    approve_client = "<client_id>"
+    if requested:
+        normalized = normalize_client_id(requested, config.project_root)
+        if normalized in registry:
+            approve_client = normalized
+
+    if not config.admin_user_ids:
+        await update.message.reply_text(
+            "Access request cannot be sent because no admin Telegram IDs are configured.\n"
+            f"Send this id to Eugene: {user_id}"
+        )
+        return
+
+    admin_text = (
+        "IFTA bot access request\n\n"
+        f"User: {_telegram_user_label(update)}\n"
+        f"Telegram id: {user_id}\n"
+        f"Requested company/client: {requested or '(not provided)'}\n\n"
+        "Approve from this bot chat with:\n"
+        f"/approve {user_id} {approve_client}"
+    )
+    delivered = await _notify_admins(context, config, admin_text)
+    if delivered:
+        await update.message.reply_text(
+            "Access request sent to Eugene. "
+            f"Your Telegram id is {user_id}."
+        )
+    else:
+        await update.message.reply_text(
+            "I could not notify Eugene automatically. "
+            f"Send him this Telegram id: {user_id}"
+        )
+
+
+async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    config: BotConfig = context.application.bot_data["config"]
+    admin_id = _effective_user_id(update)
+    if update.message is None or admin_id is None:
+        return
+    if await _reply_private_chat_error(update):
+        return
+    if admin_id not in config.admin_user_ids:
+        await update.message.reply_text("Admin only.")
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /approve <telegram_user_id> <client_id>")
+        return
+    try:
+        customer_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("Telegram user id must be digits.")
+        return
+    requested_client = " ".join(args[1:]).strip()
+
+    try:
+        rec = approve_telegram_user(
+            project_root=config.project_root,
+            user_id=customer_id,
+            requested_client=requested_client,
+        )
+    except AuthorizationError as e:
+        await update.message.reply_text(str(e))
+        return
+
+    await update.message.reply_text(
+        f"Approved Telegram id {customer_id} for {rec.name} ({rec.client_id})."
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=customer_id,
+            text=(
+                f"Access approved for {rec.name}.\n\n"
+                "Start your quarter upload with:\n"
+                "/new Q2-2026"
+            ),
+        )
+    except Exception:
+        await update.message.reply_text(
+            "Approval saved. I could not notify the customer automatically, "
+            "but they can send /start now."
+        )
 
 
 async def clients_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -995,6 +1203,8 @@ def build_application(config: BotConfig) -> Application:
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", start_command))
     app.add_handler(CommandHandler("id", id_command))
+    app.add_handler(CommandHandler("request", request_access_command))
+    app.add_handler(CommandHandler("approve", approve_command))
     app.add_handler(CommandHandler("clients", clients_command))
     app.add_handler(CommandHandler("new", new_command))
     app.add_handler(CommandHandler("status", status_command))
