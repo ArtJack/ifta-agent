@@ -239,14 +239,14 @@ def resolve_authorized_client(
         client_id = normalize_client_id(requested_client, project_root)
         rec = registry.get(client_id)
         if rec is None:
-            raise AuthorizationError(
-                f"Unknown client {requested_client!r}. Registered: {', '.join(registry)}"
-            )
+            if is_admin:
+                raise AuthorizationError(
+                    f"Unknown client {requested_client!r}. Registered: {', '.join(registry)}"
+                )
+            raise AuthorizationError("Unknown or unauthorized client.")
         if is_admin or rec in assigned:
             return rec
-        raise AuthorizationError(
-            f"Your Telegram id is not allowed to submit files for {rec.name}."
-        )
+        raise AuthorizationError("Your Telegram id is not allowed to submit for that client.")
 
     if len(assigned) == 1:
         return assigned[0]
@@ -260,6 +260,25 @@ def resolve_authorized_client(
         )
     names = ", ".join(rec.client_id for rec in assigned)
     raise AuthorizationError(f"Multiple clients allowed ({names}). Pass one after the quarter.")
+
+
+def authorize_submission_access(
+    *,
+    project_root: Path,
+    user_id: int,
+    submission: Submission,
+    admin_user_ids: tuple[int, ...],
+) -> ClientRecord:
+    """Re-check access for an existing upload session before reading/writing files."""
+    rec = load_registry(project_root).get(normalize_client_id(submission.client_id, project_root))
+    if rec is None:
+        raise AuthorizationError("This upload session is for a client that is no longer registered.")
+    if user_id in admin_user_ids or user_id in rec.telegram_user_ids:
+        return rec
+    raise AuthorizationError(
+        "This upload session is no longer authorized for your Telegram id. "
+        "Send /id to Eugene if access should be restored."
+    )
 
 
 def safe_filename(filename: str) -> str:
@@ -668,10 +687,29 @@ def _effective_user_id(update: Update) -> int | None:
     return update.effective_user.id if update.effective_user else None
 
 
+def _private_chat_error(update: Update) -> str | None:
+    chat = update.effective_chat
+    if chat is not None and chat.type != "private":
+        return "For customer data protection, use this bot only in a private chat."
+    return None
+
+
+async def _reply_private_chat_error(update: Update) -> bool:
+    if update.message is None:
+        return True
+    error = _private_chat_error(update)
+    if error is None:
+        return False
+    await update.message.reply_text(error)
+    return True
+
+
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     del context
     user_id = _effective_user_id(update)
     if update.message is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     if user_id is None:
         await update.message.reply_text("I cannot read your Telegram user id from this chat.")
@@ -683,6 +721,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     config: BotConfig = context.application.bot_data["config"]
     user_id = _effective_user_id(update)
     if update.message is None or user_id is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     assigned = clients_for_telegram_user(config.project_root, user_id)
     is_admin = user_id in config.admin_user_ids
@@ -714,6 +754,8 @@ async def clients_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = _effective_user_id(update)
     if update.message is None or user_id is None:
         return
+    if await _reply_private_chat_error(update):
+        return
     if user_id in config.admin_user_ids:
         records = list(load_registry(config.project_root).values())
     else:
@@ -739,6 +781,8 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     config: BotConfig = context.application.bot_data["config"]
     user_id = _effective_user_id(update)
     if update.message is None or user_id is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     quarter, requested_client = _split_quarter_and_client(context.args)
     if not quarter:
@@ -773,6 +817,8 @@ async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
+    if await _reply_private_chat_error(update):
+        return
     _user_data(context).pop("submission", None)
     await update.message.reply_text("Current upload session cancelled. Saved files were not deleted.")
 
@@ -787,7 +833,15 @@ def _submission_from_process_args(
         return None
     quarter, requested_client = _split_quarter_and_client(context.args)
     if quarter is None:
-        return _current_submission(context)
+        submission = _current_submission(context)
+        if submission is not None:
+            authorize_submission_access(
+                project_root=config.project_root,
+                user_id=user_id,
+                submission=submission,
+                admin_user_ids=config.admin_user_ids,
+            )
+        return submission
     rec = resolve_authorized_client(
         project_root=config.project_root,
         user_id=user_id,
@@ -800,6 +854,8 @@ def _submission_from_process_args(
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config: BotConfig = context.application.bot_data["config"]
     if update.message is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     try:
         submission = _submission_from_process_args(update, context, config)
@@ -822,11 +878,25 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config: BotConfig = context.application.bot_data["config"]
-    if update.message is None or update.message.document is None:
+    user_id = _effective_user_id(update)
+    if update.message is None or update.message.document is None or user_id is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     submission = _current_submission(context)
     if submission is None:
         await update.message.reply_text("Start an upload first: /new Q2-2026 [client_id]")
+        return
+    try:
+        authorize_submission_access(
+            project_root=config.project_root,
+            user_id=user_id,
+            submission=submission,
+            admin_user_ids=config.admin_user_ids,
+        )
+    except AuthorizationError as e:
+        _user_data(context).pop("submission", None)
+        await update.message.reply_text(str(e))
         return
 
     document = update.message.document
@@ -870,6 +940,8 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     config: BotConfig = context.application.bot_data["config"]
     if update.message is None:
+        return
+    if await _reply_private_chat_error(update):
         return
     try:
         submission = _submission_from_process_args(update, context, config)
