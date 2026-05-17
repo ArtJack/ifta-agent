@@ -24,7 +24,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
 _QUARTER_RE = re.compile(r"^Q[1-4]-\d{4}$")
 
 
@@ -115,6 +114,9 @@ class ClientRecord:
     active: bool = False
     notes: str = ""
     record_dir: Path | None = None
+    # Telegram numeric user IDs that may submit filings on behalf of this
+    # client via the bot. The bot rejects any sender not in this list.
+    telegram_user_ids: tuple[int, ...] = ()
 
     def resolve_path(self, attr: str) -> Path | None:
         """Resolve profile_path / history_path / source_folder against record_dir."""
@@ -151,6 +153,9 @@ def _load_registry_cached(registry_dir_str: str) -> dict[str, ClientRecord]:
             portal=str(payload.get("portal") or "generic"),
             profile=str(payload.get("profile") or "none"),
             source_folder=payload.get("source_folder"),
+            telegram_user_ids=tuple(
+                int(uid) for uid in payload.get("telegram_user_ids", []) if uid is not None
+            ),
             profile_path=payload.get("profile_path") or "profile.json",
             history_path=payload.get("history_path") or "history.json",
             active=bool(payload.get("active", False)),
