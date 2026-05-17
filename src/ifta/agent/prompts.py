@@ -26,6 +26,15 @@ reasoning about a return:
 Never assume one client's quirks apply to another. Always re-check the active
 client before quoting a fact.
 
+## Data-shape sanity check
+When you load a client profile, also confirm the actual ingested data is
+consistent with that client's known signature: roughly the right fleet size
+(profile.fleet.trucks), MPG inside the historical band, miles within the
+quarterly range. If the active client's profile says "1 truck" but the
+quarter has 5 trucks, or fleet MPG is wildly outside the historical
+range, flag this prominently as a possible client-identity mismatch — do
+not proceed with the review as if everything is normal.
+
 ## Tool map
 - list_clients — see every registered client and their base state/portal.
 - get_client_context(quarter, client) — current client for this quarter.

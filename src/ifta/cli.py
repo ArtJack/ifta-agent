@@ -26,6 +26,26 @@ console = Console()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+def _display_path(p: Path) -> str:
+    """Show paths relative to PROJECT_ROOT when they're inside it, otherwise
+    fall back to the absolute path. Stops `relative_to` from raising when a
+    user passes --out to a location outside the project tree."""
+    try:
+        return str(p.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(p)
+
+
+def _parse_quarter(quarter: str) -> str:
+    """Quarter format validation at the CLI boundary — surface validation
+    errors as ClickExceptions (clean one-liners) instead of letting
+    ValueError bubble up as a stack trace."""
+    try:
+        return quarter_key(quarter)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+
+
 @click.group()
 def main() -> None:
     """IFTA quarterly filing pipeline."""
@@ -54,9 +74,9 @@ def run(
     refresh_rates: bool,
 ) -> None:
     """Process raw files in inbox/<quarter>/ and emit outputs/<quarter>/."""
-    qkey = quarter_key(quarter)
-    inbox = inbox or resolve_inbox(PROJECT_ROOT, qkey, client)
-    out_dir = out_dir or resolve_output_dir(PROJECT_ROOT, qkey, client)
+    qkey = _parse_quarter(quarter)
+    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
+    out_dir = (out_dir or resolve_output_dir(PROJECT_ROOT, qkey, client)).resolve()
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
     portal_name = portal or client_context.portal or "generic"
 
@@ -100,7 +120,7 @@ def run(
 
     console.print("\n[bold]5. Writing outputs…")
     portal_csv = write_portal_csv(ret, out_dir / "ifta_portal.csv", portal=portal_name)
-    console.print(f"  ✓ {portal_csv.relative_to(PROJECT_ROOT)}")
+    console.print(f"  ✓ {_display_path(portal_csv)}")
     per_truck_lines = compute_per_truck_lines(data, ret, rates)
     truck_paths = write_per_truck_filings(
         per_truck_lines,
@@ -112,7 +132,7 @@ def run(
         data=data,
     )
     for tp in truck_paths:
-        console.print(f"  ✓ {tp.relative_to(PROJECT_ROOT)}")
+        console.print(f"  ✓ {_display_path(tp)}")
     console.print(
         "[dim]  (Note: ifta run skips the AI review — use 'ifta deliver' for "
         "review_note.md too.)[/]"
@@ -211,7 +231,7 @@ def review(
         review as agent_review,
     )
 
-    qkey = quarter_key(quarter)
+    qkey = _parse_quarter(quarter)
     out_dir = resolve_output_dir(PROJECT_ROOT, qkey, client)
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client)
 
@@ -223,7 +243,7 @@ def review(
         qkey, client=client, model=model, max_tokens=max_tokens, effort=effort
     )
     path = write_review_md(note, out_dir / "review_note.md", metrics=agent_metrics)
-    console.print(f"  ✓ {path.relative_to(PROJECT_ROOT)}")
+    console.print(f"  ✓ {_display_path(path)}")
     console.print(
         f"  [dim]Agent run: {agent_metrics.wall_time_seconds:.1f}s · "
         f"{agent_metrics.output_tokens:,} output tokens · "
@@ -265,7 +285,7 @@ def ask(
     """One-shot Q&A. The agent uses tools to ground answers in real data."""
     from ifta.agent import ask as agent_ask
 
-    qkey = quarter_key(quarter) if quarter else None
+    qkey = _parse_quarter(quarter) if quarter else None
     console.print(f"[bold]Q:[/] {question}")
     answer = agent_ask(
         question,
@@ -350,9 +370,9 @@ def deliver(
     """
     import subprocess
 
-    qkey = quarter_key(quarter)
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client)
-    out_dir = resolve_output_dir(PROJECT_ROOT, qkey, client)
+    qkey = _parse_quarter(quarter)
+    inbox = resolve_inbox(PROJECT_ROOT, qkey, client).resolve()
+    out_dir = resolve_output_dir(PROJECT_ROOT, qkey, client).resolve()
     if not inbox.exists():
         raise click.ClickException(f"inbox not found: {inbox}")
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
@@ -405,9 +425,9 @@ def deliver(
         diagnostic_paths = [miles_csv, fuel_csv]
 
     console.print("\n[bold]Step 2/4 — Files written so far[/]")
-    console.print(f"  ✓ {portal_csv.relative_to(PROJECT_ROOT)}")
+    console.print(f"  ✓ {_display_path(portal_csv)}")
     for p in diagnostic_paths:
-        console.print(f"  ✓ {p.relative_to(PROJECT_ROOT)} [dim](diagnostic)[/]")
+        console.print(f"  ✓ {_display_path(p)} [dim](diagnostic)[/]")
 
     if findings:
         console.print("\n[bold yellow]Validator findings:[/]")
@@ -434,7 +454,7 @@ def deliver(
                 effort=effort,
             )
             note_path = write_review_md(note, out_dir / "review_note.md", metrics=agent_metrics)
-            console.print(f"  ✓ {note_path.relative_to(PROJECT_ROOT)}")
+            console.print(f"  ✓ {_display_path(note_path)}")
             console.print(
                 f"  [dim]Agent: {agent_metrics.wall_time_seconds:.1f}s · "
                 f"{agent_metrics.input_tokens + agent_metrics.cache_read_tokens + agent_metrics.cache_creation_tokens:,} in / "
@@ -475,7 +495,7 @@ def deliver(
     )
     console.print(f"\n[bold]Step 4/4 — Per-truck files ({len(truck_paths)} trucks)[/]")
     for tp in truck_paths:
-        console.print(f"  ✓ {tp.relative_to(PROJECT_ROOT)}")
+        console.print(f"  ✓ {_display_path(tp)}")
 
     # --- 5. Final summary box ---
     console.rule("[bold green]✓ DONE")
@@ -495,7 +515,7 @@ def deliver(
         for tp in truck_paths:
             console.print(f"  {tp}")
         console.print()
-    console.print(f"[dim]All files in: {out_dir.relative_to(PROJECT_ROOT)}/[/]")
+    console.print(f"[dim]All files in: {_display_path(out_dir)}/[/]")
 
     # --- 6. Open in Finder (macOS) ---
     if not no_open:
@@ -576,6 +596,20 @@ def onboard(
     norm = re.sub(r"[^a-z0-9]+", "_", client_id.strip().lower()).strip("_")
     if not norm:
         raise click.ClickException("client_id must contain at least one alphanumeric character.")
+
+    # Warn when non-ASCII (or other unexpected) characters were dropped during
+    # normalization — silently rewriting 'Café-Ω' to 'caf' surprised the user
+    # in QA. Compare the input with separators removed vs the normalized id
+    # with underscores removed; any difference means characters were lost.
+    input_chars = re.sub(r"[-_ \s]+", "", client_id.strip().lower())
+    norm_chars = norm.replace("_", "")
+    if input_chars != norm_chars:
+        dropped = "".join(c for c in input_chars if c not in norm_chars)
+        console.print(
+            f"[yellow]⚠[/] Normalized {client_id!r} → {norm!r} "
+            f"(dropped: {dropped!r}). Pass --alias {client_id!r} if you want "
+            f"the original name to resolve too."
+        )
 
     # Block alias/id collisions: if `norm` already resolves to a registered
     # client (either as that client's id or one of its aliases), refuse and
