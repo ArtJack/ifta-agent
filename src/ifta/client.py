@@ -25,8 +25,34 @@ from pathlib import Path
 from typing import Any
 
 
+_QUARTER_RE = re.compile(r"^Q[1-4]-\d{4}$")
+
+
 def quarter_key(quarter: str) -> str:
-    return quarter.strip().upper().replace(" ", "-").replace("_", "-")
+    """Normalize a quarter label to canonical 'Q<n>-YYYY' form.
+
+    Accepts 'Q4-2025', 'Q4 2025', '4Q2025', 'q4_2025'. Rejects empty input,
+    invalid quarter numbers (Q0/Q5+), missing year, or otherwise unparsable
+    strings — so downstream code can trust the value rather than producing
+    confusing 'inbox not found' errors for typos.
+    """
+    if quarter is None or not quarter.strip():
+        raise ValueError("Quarter is required (e.g. 'Q4-2025').")
+
+    raw = quarter.strip().upper().replace(" ", "-").replace("_", "-")
+    # Accept 'NQYYYY' shape too — flip to 'QN-YYYY'.
+    flipped = re.match(r"^(\d)Q-?(\d{4})$", raw.replace("-", ""))
+    if flipped:
+        raw = f"Q{flipped.group(1)}-{flipped.group(2)}"
+    elif "-" not in raw and re.match(r"^Q\d\d{4}$", raw):
+        raw = f"{raw[:2]}-{raw[2:]}"
+
+    if not _QUARTER_RE.match(raw):
+        raise ValueError(
+            f"Invalid quarter {quarter!r}. Expected 'Q<1-4>-YYYY' "
+            f"(e.g. 'Q4-2025') or '<1-4>Q<YYYY>' (e.g. '4Q2025')."
+        )
+    return raw
 
 
 # Calendar quarters → (start month, end month, end day).
@@ -232,7 +258,14 @@ def _context_from_metadata(
     if not metadata_path.exists():
         return None
 
-    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Malformed JSON in {metadata_path}: {e.msg} (line {e.lineno}, "
+            f"column {e.colno}). Fix the file or remove it to fall back to "
+            f"the --client argument."
+        ) from e
     raw_id = str(payload.get("client_id") or payload.get("name") or "unknown")
     client_id = normalize_client_id(raw_id, project_root)
     registry = load_registry(project_root)
