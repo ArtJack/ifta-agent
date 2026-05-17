@@ -525,6 +525,33 @@ def deliver(
             subprocess.run(["open", str(out_dir)], check=False)
 
 
+@main.command(name="telegram-bot")
+@click.option("--skip-agent", is_flag=True, help="Run deterministic review only; skip Claude.")
+@click.option("--model", default=None, type=click.Choice(MODEL_CHOICES))
+@click.option("--effort", default=None, type=click.Choice(EFFORT_CHOICES))
+def telegram_bot(skip_agent: bool, model: str | None, effort: str | None) -> None:
+    """Run the Telegram intake bot."""
+    from ifta.telegram_bot import load_bot_config, run_polling
+
+    try:
+        config = load_bot_config(PROJECT_ROOT)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    if skip_agent:
+        config.skip_agent = True
+    if model:
+        config.agent_model = model
+    if effort:
+        config.agent_effort = effort
+
+    console.print("[bold]Starting IFTA Telegram bot[/]")
+    console.print(f"  project: {_display_path(PROJECT_ROOT)}")
+    console.print(f"  agent:   {'skipped' if config.skip_agent else config.agent_model}")
+    console.print("  stop:    Ctrl-C")
+    run_polling(config)
+
+
 @main.command(name="eval")
 @click.option(
     "--cases-dir",
@@ -770,6 +797,6 @@ def onboard(
     if make_inbox:
         console.print(f"  inbox/{norm}/")
     console.print(
-        "\n[dim]Next: drop raw files into inbox/{}/Q<n>-YYYY/, then run "
-        "`ifta run --client {} --quarter Q<n>-YYYY`.[/]".format(norm, norm)
+        f"\n[dim]Next: drop raw files into inbox/{norm}/Q<n>-YYYY/, then run "
+        f"`ifta run --client {norm} --quarter Q<n>-YYYY`.[/]"
     )
