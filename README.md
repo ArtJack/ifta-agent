@@ -211,7 +211,7 @@ ifta_pipeline/
 
 ## The AI agent (Phase 2)
 
-The agent has **14 tools** to ground its answers in real data — your
+The agent has **16 tools** to ground its answers in real data — your
 returns, the validator, the regulations KB, rate matrix, and 21 quarters
 of historical filings between two carriers.
 
