@@ -18,6 +18,7 @@ from ifta.telegram_bot import (
     BotConfig,
     DeliveryBlockedError,
     Submission,
+    authorize_submission_access,
     check_client_identity,
     clients_for_telegram_user,
     parse_user_ids,
@@ -102,13 +103,31 @@ def test_resolve_authorized_client_allows_registered_user(tmp_path: Path) -> Non
 def test_resolve_authorized_client_rejects_wrong_user(tmp_path: Path) -> None:
     _write_client(tmp_path, "dm_express", telegram_user_ids=[111])
 
-    with pytest.raises(AuthorizationError):
+    with pytest.raises(AuthorizationError, match="not allowed"):
         resolve_authorized_client(
             project_root=tmp_path,
             user_id=999,
             requested_client="dm_express",
             admin_user_ids=(),
         )
+
+
+def test_resolve_authorized_client_hides_registry_from_unapproved_user(tmp_path: Path) -> None:
+    _write_client(tmp_path, "dm_express", telegram_user_ids=[111])
+    _write_client(tmp_path, "menshikov_llc", telegram_user_ids=[222])
+
+    with pytest.raises(AuthorizationError) as exc:
+        resolve_authorized_client(
+            project_root=tmp_path,
+            user_id=999,
+            requested_client="not_a_real_client",
+            admin_user_ids=(),
+        )
+
+    message = str(exc.value)
+    assert message == "Unknown or unauthorized client."
+    assert "dm_express" not in message
+    assert "menshikov_llc" not in message
 
 
 def test_admin_can_choose_any_client(tmp_path: Path) -> None:
@@ -121,6 +140,33 @@ def test_admin_can_choose_any_client(tmp_path: Path) -> None:
         admin_user_ids=(999,),
     )
     assert rec.client_id == "dm_express"
+
+
+def test_authorize_submission_access_rechecks_existing_session(tmp_path: Path) -> None:
+    _write_client(tmp_path, "dm_express", telegram_user_ids=[111])
+    submission = Submission(
+        client_id="dm_express",
+        client_name="DM EXPRESS INC",
+        quarter="Q2-2026",
+        inbox=tmp_path / "inbox" / "dm_express" / "Q2-2026",
+        out_dir=tmp_path / "outputs" / "dm_express" / "Q2-2026",
+    )
+
+    rec = authorize_submission_access(
+        project_root=tmp_path,
+        user_id=111,
+        submission=submission,
+        admin_user_ids=(),
+    )
+    assert rec.client_id == "dm_express"
+
+    with pytest.raises(AuthorizationError, match="no longer authorized"):
+        authorize_submission_access(
+            project_root=tmp_path,
+            user_id=999,
+            submission=submission,
+            admin_user_ids=(),
+        )
 
 
 def test_prepare_submission_archives_existing_uploads(tmp_path: Path) -> None:
