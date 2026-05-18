@@ -534,7 +534,11 @@ def web(host: str, port: int, reload: bool) -> None:
     import uvicorn
     from dotenv import load_dotenv
 
-    load_dotenv(PROJECT_ROOT / ".env")
+    # override=True so .env always wins over the shell — some launchers
+    # (Claude Desktop, certain IDEs) export ANTHROPIC_API_KEY="" as a
+    # sandbox, and load_dotenv's default behavior of "don't clobber existing
+    # vars" would then silently leave the agent disabled.
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
     console.print(f"[bold]Starting IFTA web intake[/] on http://{host}:{port}")
     uvicorn.run(
         "ifta.web.app:create_app",
@@ -571,7 +575,11 @@ def worker(poll_interval: float, once: bool) -> None:
     from ifta.web.email import EmailClient, load_email_config_from_env
     from ifta.web.models import Submission
 
-    load_dotenv(PROJECT_ROOT / ".env")
+    # override=True so .env always wins over the shell — some launchers
+    # (Claude Desktop, certain IDEs) export ANTHROPIC_API_KEY="" as a
+    # sandbox, and load_dotenv's default behavior of "don't clobber existing
+    # vars" would then silently leave the agent disabled.
+    load_dotenv(PROJECT_ROOT / ".env", override=True)
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
