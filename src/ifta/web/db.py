@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ifta.web.models import Submission, SubmissionStatus
@@ -219,6 +219,43 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
                 submission_id,
             ),
         )
+
+
+def reap_stale_running(
+    path: Path, *, max_seconds_running: int = 900
+) -> list[Submission]:
+    """Mark RUNNING rows older than the cutoff as FAILED, return them.
+
+    Covers the case where the worker process is killed mid-job (OOM, SIGKILL,
+    host reboot, launchd kickstart) — the row stays in RUNNING forever and is
+    never picked up by claim_next_queued. Called at worker startup so each
+    fresh process recovers the previous run's orphans before polling.
+    """
+    cutoff_iso = (datetime.now(UTC) - timedelta(seconds=max_seconds_running)).isoformat()
+    error_text = (
+        "Worker stopped while this submission was being processed. "
+        "It will not retry automatically — re-submit at artjeck.com/ifta/submit."
+    )
+    finished_at = _now_iso()
+    with _connect(path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM submissions WHERE status = ? AND started_at < ?",
+            (SubmissionStatus.RUNNING.value, cutoff_iso),
+        ).fetchall()
+        if not rows:
+            return []
+        conn.execute(
+            "UPDATE submissions SET status = ?, finished_at = ?, error = ?"
+            " WHERE status = ? AND started_at < ?",
+            (
+                SubmissionStatus.FAILED.value,
+                finished_at,
+                error_text,
+                SubmissionStatus.RUNNING.value,
+                cutoff_iso,
+            ),
+        )
+    return [_row_to_submission(r) for r in rows]
 
 
 def list_submissions(
