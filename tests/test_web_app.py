@@ -90,9 +90,10 @@ def test_submit_creates_submission_and_saves_files(
     inbox = submissions_root / sid / "inbox" / "Q1-2026"
     assert inbox.exists()
     files = {p.name for p in inbox.iterdir()}
-    assert files == {"miles.csv", "fuel.csv"}
-    assert (inbox / "miles.csv").read_bytes() == miles_csv
-    assert (inbox / "fuel.csv").read_bytes() == fuel_csv
+    # Prefix prevents collisions when both files happen to share a name.
+    assert files == {"mileage_miles.csv", "fuel_fuel.csv"}
+    assert (inbox / "mileage_miles.csv").read_bytes() == miles_csv
+    assert (inbox / "fuel_fuel.csv").read_bytes() == fuel_csv
 
 
 def test_status_returns_submission_state(client: TestClient) -> None:
@@ -331,7 +332,9 @@ def test_submit_with_turnstile_bad_token(
         data={
             "email": "a@b.co",
             "quarter": "Q1-2026",
-            "cf_turnstile_response": "bogus-token",
+            # Cloudflare's widget emits a hyphenated name; the backend uses
+            # the alias to bind it.
+            "cf-turnstile-response": "bogus-token",
         },
         files={
             "mileage_file": ("m.csv", b"x", "text/csv"),
@@ -362,7 +365,7 @@ def test_submit_with_turnstile_valid_token(
         data={
             "email": "a@b.co",
             "quarter": "Q1-2026",
-            "cf_turnstile_response": "good-token",
+            "cf-turnstile-response": "good-token",
         },
         files={
             "mileage_file": ("m.csv", b"x", "text/csv"),
@@ -370,6 +373,149 @@ def test_submit_with_turnstile_valid_token(
         },
     )
     assert r.status_code == 202
+
+
+def test_submit_duplicate_filename_does_not_overwrite(
+    client: TestClient, submissions_root: Path
+) -> None:
+    """Two uploads with the same name must both survive to disk (bug_002).
+
+    Without the field-name prefix the second save would silently replace
+    the first and the pipeline would compute on partial data.
+    """
+    miles_bytes = b"miles,KY,100\n"
+    fuel_bytes = b"fuel,KY,150\n"
+    r = client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026"},
+        files={
+            # Both files happen to share the exact same client-side name —
+            # realistic when both come from the same fleet portal.
+            "mileage_file": ("data.csv", miles_bytes, "text/csv"),
+            "fuel_file": ("data.csv", fuel_bytes, "text/csv"),
+        },
+    )
+    assert r.status_code == 202
+    sid = r.json()["submission_id"]
+    inbox = submissions_root / sid / "inbox" / "Q1-2026"
+    contents = {p.name: p.read_bytes() for p in inbox.iterdir()}
+    assert contents == {
+        "mileage_data.csv": miles_bytes,
+        "fuel_data.csv": fuel_bytes,
+    }
+
+
+def test_submit_cleans_up_on_oversize_second_upload(
+    tmp_path: Path,
+    submissions_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the second file blows the size cap, no leftovers on disk (bug_021)."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(submissions_root))
+    monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
+    monkeypatch.setenv("IFTA_WEB_MAX_FILE_MB", "1")
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    from ifta.web.app import create_app
+
+    test_client = TestClient(create_app())
+
+    r = test_client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026"},
+        files={
+            "mileage_file": ("ok.csv", b"x" * 1024, "text/csv"),
+            "fuel_file": ("big.csv", b"A" * (2 * 1024 * 1024), "text/csv"),
+        },
+    )
+    assert r.status_code == 413
+    # The whole submission tree must be gone — no orphan mileage file.
+    leftovers = list(submissions_root.rglob("*")) if submissions_root.exists() else []
+    leftover_files = [p for p in leftovers if p.is_file()]
+    assert leftover_files == []
+
+
+def test_confirm_endpoint_escapes_html_in_email(
+    email_app: tuple[TestClient, list[dict[str, Any]]],
+) -> None:
+    """EMAIL_RE permits `<svg/onload=...>` — the response must escape it (bug_001)."""
+    test_client, sent = email_app
+    payload_email = "<svg/onload=alert(1)>@a.b"
+    r = test_client.post(
+        "/submit",
+        data={"email": payload_email, "quarter": "Q1-2026"},
+        files={
+            "mileage_file": ("m.csv", b"x", "text/csv"),
+            "fuel_file": ("f.csv", b"y", "text/csv"),
+        },
+    )
+    assert r.status_code == 202
+    token = sent[0]["text"].split("/confirm/")[1].split()[0].strip()
+    confirm = test_client.get(f"/confirm/{token}")
+    assert confirm.status_code == 200
+    # Raw payload must not appear; escaped form must.
+    assert "<svg/onload" not in confirm.text
+    assert "&lt;svg/onload=alert(1)&gt;" in confirm.text
+
+
+def test_submit_confirmation_send_failure_returns_502(
+    tmp_path: Path,
+    submissions_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Resend rejects the confirmation, surface it instead of stranding
+    the row in PENDING_CONFIRMATION (merged_bug_009 confirmation half)."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(submissions_root))
+    monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+
+    from ifta.web import email as email_module
+
+    def boom(_params: dict[str, Any]) -> str:
+        raise RuntimeError("Resend down")
+
+    monkeypatch.setattr(email_module, "_send_via_resend", boom)
+    from ifta.web.app import create_app
+
+    test_client = TestClient(create_app())
+
+    r = test_client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026"},
+        files={
+            "mileage_file": ("m.csv", b"x", "text/csv"),
+            "fuel_file": ("f.csv", b"y", "text/csv"),
+        },
+    )
+    assert r.status_code == 502
+    # The row should be discoverable via /status — find it.
+    # (We can't get the sid from the 502 response; query by listing.)
+    from ifta.web import db as web_db
+
+    subs = web_db.list_submissions(tmp_path / "jobs.db")
+    assert len(subs) == 1
+    assert subs[0].status.value == "failed"
+    assert subs[0].error is not None
+    assert "confirmation" in subs[0].error.lower()
+
+
+def test_status_surfaces_packet_sent(client: TestClient) -> None:
+    """/status reports packet_sent so ops can distinguish DONE-and-emailed
+    from DONE-but-Resend-failed (merged_bug_009 packet half)."""
+    r = client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026"},
+        files={
+            "mileage_file": ("m.csv", b"x", "text/csv"),
+            "fuel_file": ("f.csv", b"y", "text/csv"),
+        },
+    )
+    body = client.get(f"/status/{r.json()['submission_id']}").json()
+    assert "packet_sent" in body
+    assert body["packet_sent"] is None
 
 
 def test_submit_sanitizes_filename(
