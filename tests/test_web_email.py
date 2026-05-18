@@ -56,6 +56,17 @@ def test_config_enabled_flag() -> None:
     assert EmailConfig(api_key="x").enabled is True
 
 
+def test_default_public_base_url_points_at_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default must match the FastAPI host (where /confirm lives) not the
+    marketing site, otherwise confirmation links 404 (bug_006)."""
+    monkeypatch.setenv("RESEND_API_KEY", "re_xxx")
+    monkeypatch.delenv("IFTA_WEB_PUBLIC_BASE_URL", raising=False)
+    cfg = load_email_config_from_env()
+    assert cfg.public_base_url == "https://ifta-api.artjeck.com"
+
+
 def test_load_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESEND_API_KEY", "re_xxx")
     monkeypatch.setenv("RESEND_FROM_EMAIL", "From <a@b.co>")
