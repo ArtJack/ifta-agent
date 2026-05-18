@@ -168,6 +168,9 @@ def test_submit_rejects_oversize_file(
     monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
     monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(submissions_root))
     monkeypatch.setenv("IFTA_WEB_MAX_FILE_MB", "1")  # 1 MB cap for this test
+    monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
     from ifta.web.app import create_app
 
     test_client = TestClient(create_app())

@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from ifta.agent.metrics import AgentMetrics
 from ifta.agent.prompts import REVIEW_PROMPT_TEMPLATE, SYSTEM_PROMPT
 from ifta.agent.tools import ALL_TOOLS
-from ifta.client import load_client_context
+from ifta.client import load_client_context, quarter_key
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -224,17 +224,80 @@ def review(
     model: str = DEFAULT_MODEL,
     max_tokens: int | None = None,
     effort: str = DEFAULT_EFFORT,
+    inbox_dir: Path | None = None,
+    output_dir: Path | None = None,
+    client_name: str | None = None,
 ) -> tuple[ReviewNote, AgentMetrics]:
     """Produce a structured pre-filing review for one quarter.
 
     Returns (review_note, metrics). Retries the agent call once if the first
     response can't be parsed as JSON (caught ~10% of intermittent failures in
     QA — models occasionally produce nearly-valid JSON with an unescaped char).
+
+    For anonymous web submissions, pass `inbox_dir` and `output_dir` to point
+    the agent's tools at the submission's own files (under
+    `data/web_submissions/<sid>/`) rather than at the standard
+    `inbox/<client>/<quarter>/` paths. `client_name` is shown to the agent
+    so it has something more useful than "Anonymous web submission" when
+    the customer provided their carrier name.
     """
-    client_context = load_client_context(PROJECT_ROOT, quarter, client=client)
+    from ifta.agent import context as agent_context
+
+    qkey = quarter_key(quarter)
+    override_token: object | None = None
+    if inbox_dir is not None or output_dir is not None:
+        if inbox_dir is None or output_dir is None:
+            raise ValueError(
+                "inbox_dir and output_dir must both be set when overriding paths."
+            )
+        override_token = agent_context.set_context(
+            agent_context.AgentExecutionContext(
+                inbox=inbox_dir,
+                output_dir=output_dir,
+                quarter=qkey,
+                client_name=client_name,
+            )
+        )
+
+    try:
+        if override_token is not None:
+            client_context_dict = {
+                "client_id": None,
+                "client_name": client_name or "Anonymous web submission",
+                "source": "web",
+                "notes": (
+                    "First-time anonymous web submission. No historical "
+                    "filings or carrier profile available — review the "
+                    "current quarter on its own merits."
+                ),
+            }
+        else:
+            client_context_dict = load_client_context(
+                PROJECT_ROOT, quarter, client=client
+            ).to_prompt_dict()
+        return _run_review_with_retry(
+            quarter=quarter,
+            client_context_dict=client_context_dict,
+            model=model,
+            max_tokens=max_tokens,
+            effort=effort,
+        )
+    finally:
+        if override_token is not None:
+            agent_context.reset(override_token)  # type: ignore[arg-type]
+
+
+def _run_review_with_retry(
+    *,
+    quarter: str,
+    client_context_dict: dict,
+    model: str,
+    max_tokens: int | None,
+    effort: str,
+) -> tuple[ReviewNote, AgentMetrics]:
     prompt = REVIEW_PROMPT_TEMPLATE.format(
         quarter=quarter,
-        client_context=json.dumps(client_context.to_prompt_dict(), indent=2),
+        client_context=json.dumps(client_context_dict, indent=2),
     )
     text, _, metrics = run_agent(
         prompt,
