@@ -39,7 +39,13 @@ def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q4-2025") ->
     return inbox
 
 
-def test_process_submission_produces_packet(tmp_path: Path) -> None:
+def test_process_submission_produces_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pipeline now optionally invokes the agent. For this fast test we use
+    # the deterministic-only path; agent invocation is covered separately.
+    monkeypatch.setenv("IFTA_WEB_SKIP_AGENT", "1")
+
     sid = "test_packet"
     _stage_fixture(tmp_path, sid)
     sub = _make_submission(sid)
@@ -67,6 +73,74 @@ def test_process_submission_missing_inbox_raises(tmp_path: Path) -> None:
     sub = _make_submission("nope")
     with pytest.raises(PipelineError, match="inbox not found"):
         process_submission(tmp_path, sub)
+
+
+def test_process_submission_invokes_agent_when_key_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pipeline should call agent_review with explicit inbox/output paths."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake")
+    monkeypatch.delenv("IFTA_WEB_SKIP_AGENT", raising=False)
+
+    sid = "agent_run"
+    _stage_fixture(tmp_path, sid)
+    sub = _make_submission(sid)
+
+    captured: dict[str, object] = {}
+
+    def fake_review(quarter, **kwargs):
+        captured["quarter"] = quarter
+        captured.update(kwargs)
+        from ifta.agent.metrics import AgentMetrics
+        from ifta.agent.runner import ReviewNote
+
+        note = ReviewNote(
+            summary="Anonymous submission OK; numbers reconcile.",
+            issues=[],
+            filing_reminders=[],
+            next_steps=[],
+        )
+        return note, AgentMetrics(model="claude-opus-4-7")
+
+    monkeypatch.setattr("ifta.web.pipeline.agent_review", fake_review, raising=False)
+    # Patch where the lazy import lands inside _write_agent_review.
+    import ifta.agent as agent_pkg
+
+    monkeypatch.setattr(agent_pkg, "review", fake_review)
+
+    out_dir = process_submission(tmp_path, sub)
+
+    assert captured["inbox_dir"] == tmp_path / sid / "inbox" / "Q4-2025"
+    assert captured["output_dir"] == out_dir
+    assert captured["client_name"] == "MENSHIKOV LLC"
+    # The agent's note ends up in review_note.md
+    review_text = (out_dir / "review_note.md").read_text(encoding="utf-8")
+    assert "Anonymous submission OK" in review_text
+
+
+def test_process_submission_falls_back_when_agent_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the agent raises, the customer still gets the deterministic packet."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake")
+    monkeypatch.delenv("IFTA_WEB_SKIP_AGENT", raising=False)
+
+    sid = "agent_fail"
+    _stage_fixture(tmp_path, sid)
+    sub = _make_submission(sid)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated agent outage")
+
+    import ifta.agent as agent_pkg
+
+    monkeypatch.setattr(agent_pkg, "review", boom)
+
+    out_dir = process_submission(tmp_path, sub)
+    # Packet still produced; review_note.md falls back to deterministic copy.
+    text = (out_dir / "review_note.md").read_text(encoding="utf-8")
+    assert "795.16" in text
+    assert "deterministic pipeline output only" in text
 
 
 def test_process_submission_empty_inbox_raises(tmp_path: Path) -> None:

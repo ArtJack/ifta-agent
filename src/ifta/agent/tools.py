@@ -40,15 +40,57 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # ---------------------------------------------------------------------------
 
 
+def _resolve_inbox(qkey: str, client: str | None) -> Path:
+    """Return the inbox path the agent should read from.
+
+    Honors the AgentExecutionContext override (set by the web worker for
+    anonymous submissions whose data lives at
+    `data/web_submissions/<sid>/inbox/<quarter>/`). Falls back to the
+    standard client-registry resolution when no override is set.
+    """
+    from ifta.agent import context as agent_context
+
+    override = agent_context.get()
+    if override is not None and override.quarter == qkey:
+        return override.inbox
+    return resolve_inbox(PROJECT_ROOT, qkey, client)
+
+
+def _build_client_context(
+    qkey: str, client: str | None, inbox: Path
+) -> ClientContext:
+    """Build the prompt-side client context, honoring the override.
+
+    For anonymous web submissions the registry lookup is skipped — we
+    surface a minimal context naming the carrier (if they provided one)
+    so the agent knows it's a first-time, no-history submission.
+    """
+    from ifta.agent import context as agent_context
+
+    override = agent_context.get()
+    if override is not None and override.quarter == qkey:
+        return ClientContext(
+            client_id="web",
+            client_name=override.client_name or "Anonymous web submission",
+            source="web",
+            notes=(
+                "First-time anonymous web submission. No historical filings "
+                "or carrier profile available — review the current quarter "
+                "on its own merits."
+            ),
+        )
+    return load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
+
+
 def _load_quarter_full(
     quarter: str, client: str | None = None
 ) -> tuple[CleanData, RateTable, IftaReturn, list[Finding], ClientContext]:
     """Re-ingest + compute. Returns all the intermediate objects too."""
     qkey = quarter_key(quarter)
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client)
+    inbox = _resolve_inbox(qkey, client)
     if not inbox.exists():
         raise FileNotFoundError(f"No inbox folder for {qkey} at {inbox}")
-    client_context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
+    client_context = _build_client_context(qkey, client, inbox)
     data = ingest_folder(inbox)
     rates = fetch_rates(qkey)
     ret = compute_return(data, rates)
@@ -90,8 +132,8 @@ def get_client_context(quarter: str, client: str | None = None) -> str:
         client: Optional client id/name when using inbox/<client>/<quarter>/.
     """
     qkey = quarter_key(quarter)
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client)
-    context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
+    inbox = _resolve_inbox(qkey, client)
+    context = _build_client_context(qkey, client, inbox)
     return json.dumps(
         {"quarter": qkey, "inbox": str(inbox), "client_context": context.to_prompt_dict()},
         indent=2,
@@ -167,7 +209,7 @@ def inspect_raw_inputs(quarter: str, client: str | None = None) -> str:
         client: Optional client id/name when using inbox/<client>/<quarter>/.
     """
     qkey = quarter_key(quarter)
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client)
+    inbox = _resolve_inbox(qkey, client)
     report = preflight_inputs(inbox)
     return json.dumps(report.to_dict(), indent=2)
 
