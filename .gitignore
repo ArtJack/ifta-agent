@@ -38,3 +38,11 @@ tmp/
 inbox/*/
 outputs/*/
 data/telegram_access.json
+
+# Web intake runtime state
+data/web_jobs.db
+data/web_jobs.db-*
+data/web_submissions/
+
+# launchd / cloudflared logs (created by deploy/install.sh on the Mac mini)
+logs/
