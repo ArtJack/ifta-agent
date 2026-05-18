@@ -525,6 +525,95 @@ def deliver(
             subprocess.run(["open", str(out_dir)], check=False)
 
 
+@main.command(name="web")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8000, show_default=True, type=int)
+@click.option("--reload", is_flag=True, help="Reload on code changes (dev only).")
+def web(host: str, port: int, reload: bool) -> None:
+    """Run the FastAPI web intake server (customer upload endpoint)."""
+    import uvicorn
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env")
+    console.print(f"[bold]Starting IFTA web intake[/] on http://{host}:{port}")
+    uvicorn.run(
+        "ifta.web.app:create_app",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=True,
+    )
+
+
+@main.command(name="worker")
+@click.option(
+    "--poll-interval",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Seconds to sleep when the queue is empty.",
+)
+@click.option("--once", is_flag=True, help="Process at most one job and exit (for ops/cron).")
+def worker(poll_interval: float, once: bool) -> None:
+    """Run the web-intake polling worker.
+
+    Drains submissions from the SQLite jobs table; runs the deterministic IFTA
+    pipeline; on success/failure emails the customer (if RESEND_API_KEY is set).
+    """
+    import logging
+    from pathlib import Path as _Path
+
+    from dotenv import load_dotenv
+
+    from ifta.web import db as _db
+    from ifta.web import worker as worker_module
+    from ifta.web.app import get_db_path, get_submissions_dir
+    from ifta.web.email import EmailClient, load_email_config_from_env
+    from ifta.web.models import Submission
+
+    load_dotenv(PROJECT_ROOT / ".env")
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+    )
+
+    db_path = get_db_path()
+    submissions_dir = get_submissions_dir()
+    email_client = EmailClient(load_email_config_from_env())
+
+    def on_success(sub: Submission, out_dir: _Path) -> None:
+        if email_client.send_packet(sub, out_dir):
+            _db.mark_packet_sent(db_path, sub.id)
+
+    def on_failure(sub: Submission, error: str) -> None:
+        email_client.send_failure(sub, error)
+
+    console.print("[bold]Starting IFTA worker[/]")
+    console.print(f"  db:           {db_path}")
+    console.print(f"  submissions:  {submissions_dir}")
+    console.print(f"  email:        {'enabled' if email_client.config.enabled else 'disabled (no RESEND_API_KEY)'}")
+    console.print(f"  poll:         {poll_interval}s")
+    console.print("  stop:         Ctrl-C")
+
+    if once:
+        sub = worker_module.process_one_job(
+            db_path, submissions_dir, on_success=on_success, on_failure=on_failure
+        )
+        if sub is None:
+            console.print("[dim]queue empty[/]")
+        else:
+            console.print(f"  processed {sub.id} → {sub.status.value}")
+        return
+
+    worker_module.run_forever(
+        db_path,
+        submissions_dir,
+        poll_interval_seconds=poll_interval,
+        on_success=on_success,
+        on_failure=on_failure,
+    )
+
+
 @main.command(name="telegram-bot")
 @click.option("--skip-agent", is_flag=True, help="Run deterministic review only; skip Claude.")
 @click.option("--model", default=None, type=click.Choice(MODEL_CHOICES))
