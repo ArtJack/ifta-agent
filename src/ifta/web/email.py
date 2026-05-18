@@ -27,7 +27,9 @@ log = logging.getLogger("ifta.web.email")
 
 
 DEFAULT_FROM = "IFTA Service <ifta@artjeck.com>"
-DEFAULT_PUBLIC_BASE_URL = "https://artjeck.com"
+# /confirm/<token> lives on the FastAPI backend, not the marketing site —
+# the default must match where deploy/README.md routes the Cloudflare Tunnel.
+DEFAULT_PUBLIC_BASE_URL = "https://ifta-api.artjeck.com"
 
 
 @dataclass(frozen=True)

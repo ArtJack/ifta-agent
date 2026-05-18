@@ -579,6 +579,10 @@ def worker(poll_interval: float, once: bool) -> None:
 
     db_path = get_db_path()
     submissions_dir = get_submissions_dir()
+    # Schema is created by create_app() on the web side, but the worker may
+    # start first (launchd RunAtLoad on both agents, no ordering guarantee).
+    # init_db is idempotent — safe to call here too.
+    _db.init_db(db_path)
     email_client = EmailClient(load_email_config_from_env())
 
     def on_success(sub: Submission, out_dir: _Path) -> None:

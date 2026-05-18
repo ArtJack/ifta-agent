@@ -152,6 +152,86 @@ def test_mark_done_clears_error(db_path: Path) -> None:
     assert fetched.error is None
 
 
+def test_reap_stale_running_flips_to_failed(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rows stuck in RUNNING past the cutoff get marked FAILED (bug_004)."""
+    import sqlite3
+    from datetime import UTC, datetime, timedelta
+
+    sub = _create_queued(db_path, "stuck")
+    db.claim_next_queued(db_path)  # flips to RUNNING, sets started_at=now
+    # Backdate started_at to 1 hour ago so it's past any reasonable cutoff.
+    long_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE submissions SET started_at = ? WHERE id = ?",
+            (long_ago, sub.id),
+        )
+        conn.commit()
+
+    reaped = db.reap_stale_running(db_path, max_seconds_running=900)
+    assert [r.id for r in reaped] == [sub.id]
+    fetched = db.get_submission(db_path, sub.id)
+    assert fetched is not None
+    assert fetched.status.value == "failed"
+    assert fetched.error is not None
+    assert "worker stopped" in fetched.error.lower()
+
+
+def test_reap_stale_running_leaves_recent_rows_alone(db_path: Path) -> None:
+    """A worker currently mid-job should not be killed by a startup reap."""
+    sub = _create_queued(db_path, "fresh")
+    db.claim_next_queued(db_path)  # started_at = now
+    reaped = db.reap_stale_running(db_path, max_seconds_running=900)
+    assert reaped == []
+    fetched = db.get_submission(db_path, sub.id)
+    assert fetched is not None
+    assert fetched.status.value == "running"
+
+
+def test_run_forever_reaps_on_startup(
+    db_path: Path,
+    submissions_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_forever calls the reaper before entering the loop, firing
+    on_failure callbacks for orphans (bug_004 + merged_bug_009 surfacing)."""
+    import sqlite3
+    from datetime import UTC, datetime, timedelta
+
+    _create_queued(db_path, "ghost")
+    db.claim_next_queued(db_path)
+    long_ago = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE submissions SET started_at = ? WHERE id = ?",
+            (long_ago, "ghost"),
+        )
+        conn.commit()
+
+    failures: list[tuple[str, str]] = []
+
+    # Patch the polling loop so we don't block forever — make process_one_job
+    # raise KeyboardInterrupt immediately so run_forever returns after the
+    # reap step.
+    def fake_process_one_job(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(worker, "process_one_job", fake_process_one_job)
+
+    worker.run_forever(
+        db_path,
+        submissions_dir,
+        on_failure=lambda s, msg: failures.append((s.id, msg)),
+    )
+    assert len(failures) == 1
+    assert failures[0][0] == "ghost"
+    fetched = db.get_submission(db_path, "ghost")
+    assert fetched is not None
+    assert fetched.status.value == "failed"
+
+
 def test_mark_failed_truncates_long_errors(db_path: Path) -> None:
     sub = _create_queued(db_path, "huge_err")
     db.claim_next_queued(db_path)

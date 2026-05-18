@@ -11,9 +11,11 @@ Run with: `ifta web` (uvicorn factory mode).
 
 from __future__ import annotations
 
+import html
 import os
 import re
 import secrets
+import shutil
 import uuid
 from pathlib import Path
 
@@ -106,7 +108,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/status/{submission_id}")
-    def status(submission_id: str) -> dict[str, str | None]:
+    def status(submission_id: str) -> dict[str, str | bool | None]:
         sub = db.get_submission(db_path, submission_id)
         if sub is None:
             raise HTTPException(status_code=404, detail="submission not found")
@@ -115,6 +117,9 @@ def create_app() -> FastAPI:
             "status": sub.status.value,
             "quarter": sub.quarter,
             "error": sub.error,
+            # packet_sent_at lets ops distinguish "DONE and emailed" from
+            # "DONE but Resend send failed silently". NULL = packet not (yet) sent.
+            "packet_sent": sub.packet_sent_at.isoformat() if sub.packet_sent_at else None,
         }
 
     @app.post("/submit", status_code=202)
@@ -124,7 +129,10 @@ def create_app() -> FastAPI:
         email: str = Form(...),
         quarter: str = Form(...),
         company: str | None = Form(None),
-        cf_turnstile_response: str | None = Form(None),
+        # FastAPI Form binding is verbatim — no hyphen↔underscore mapping.
+        # Cloudflare's widget emits a hidden input literally named
+        # `cf-turnstile-response`, so the alias is required.
+        cf_turnstile_response: str | None = Form(None, alias="cf-turnstile-response"),
         mileage_file: UploadFile = File(...),
         fuel_file: UploadFile = File(...),
     ) -> dict[str, str]:
@@ -152,11 +160,7 @@ def create_app() -> FastAPI:
 
         sid = uuid.uuid4().hex
         token = secrets.token_urlsafe(32)
-
-        inbox = submissions_dir / sid / "inbox" / qkey
-        inbox.mkdir(parents=True, exist_ok=True)
-        _save_upload(mileage_file, inbox, max_file_bytes)
-        _save_upload(fuel_file, inbox, max_file_bytes)
+        sub_root = submissions_dir / sid
 
         # With email enabled, customer must click the link to start processing.
         # In dev (no API key) we skip confirmation so manual testing works.
@@ -165,17 +169,47 @@ def create_app() -> FastAPI:
             if email_config.enabled
             else SubmissionStatus.QUEUED
         )
-        sub = db.create_submission(
-            db_path,
-            submission_id=sid,
-            email=email,
-            quarter=qkey,
-            confirm_token=token,
-            company=(company or "").strip() or None,
-            status=initial_status,
-        )
-        if email_config.enabled:
-            email_client.send_confirmation(sub)
+
+        # Either every artifact lands (files + DB row) or nothing does. A 413
+        # on the second upload, or a UNIQUE collision on confirm_token, would
+        # otherwise leave the first file behind forever.
+        try:
+            inbox = sub_root / "inbox" / qkey
+            inbox.mkdir(parents=True, exist_ok=True)
+            _save_upload(mileage_file, inbox, max_file_bytes, prefix="mileage")
+            _save_upload(fuel_file, inbox, max_file_bytes, prefix="fuel")
+            sub = db.create_submission(
+                db_path,
+                submission_id=sid,
+                email=email,
+                quarter=qkey,
+                confirm_token=token,
+                company=(company or "").strip() or None,
+                status=initial_status,
+            )
+        except Exception:
+            shutil.rmtree(sub_root, ignore_errors=True)
+            raise
+
+        if email_config.enabled and not email_client.send_confirmation(sub):
+                # Don't strand the customer in PENDING_CONFIRMATION with no
+                # way out. Mark FAILED so /status surfaces it and ops can
+                # see what happened.
+                db.mark_failed(
+                    db_path,
+                    sub.id,
+                    error=(
+                        "Couldn't send the confirmation email. "
+                        "Try again in a few minutes or email hello@artjeck.com."
+                    ),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Couldn't send confirmation email. "
+                        "Please try again in a few minutes."
+                    ),
+                )
         return {"submission_id": sub.id, "status": sub.status.value}
 
     @app.get("/confirm/{token}", response_class=HTMLResponse)
@@ -241,10 +275,15 @@ def _html_page(title: str, body: str) -> str:
 
 
 def _confirmed_html(email: str, quarter: str) -> str:
+    # Both values are escaped — EMAIL_RE permits HTML-active chars (e.g.
+    # `<svg/onload=…>@a.b` passes), so the only protection here is escaping
+    # at render time.
+    safe_email = html.escape(email)
+    safe_quarter = html.escape(quarter)
     return (
         f"<h1>Got it — processing started</h1>"
-        f"<p>You'll receive your <strong>{quarter}</strong> IFTA packet at "
-        f"<code>{email}</code> in about 5 minutes.</p>"
+        f"<p>You'll receive your <strong>{safe_quarter}</strong> IFTA packet at "
+        f"<code>{safe_email}</code> in about 5 minutes.</p>"
         f"<p>The email will include your portal CSV, a review note, and one "
         f"Excel file per truck.</p>"
     )
@@ -254,10 +293,12 @@ def _already_running_html(email: str, quarter: str, status: SubmissionStatus) ->
     label = (
         "is already processing" if status == SubmissionStatus.RUNNING else "is ready"
     )
+    safe_email = html.escape(email)
+    safe_quarter = html.escape(quarter)
     return (
         f"<h1>Already confirmed</h1>"
-        f"<p>Your <strong>{quarter}</strong> submission {label}. "
-        f"Check <code>{email}</code> — the packet should arrive shortly "
+        f"<p>Your <strong>{safe_quarter}</strong> submission {label}. "
+        f"Check <code>{safe_email}</code> — the packet should arrive shortly "
         f"(or has already arrived).</p>"
     )
 
@@ -283,8 +324,16 @@ _GENERIC_HTML = (
 )
 
 
-def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int) -> Path:
-    safe_name = SAFE_FILENAME_RE.sub("_", Path(f.filename or "upload").name)
+def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int, *, prefix: str) -> Path:
+    """Save an uploaded file with a field-name prefix to avoid collisions.
+
+    Two real customer files can share a name (e.g. both `export.csv` from
+    the same fleet portal, or both `filename=""` so they fall back to
+    `upload`). Without a prefix the second save would silently overwrite
+    the first and the pipeline would compute on partial data.
+    """
+    raw_name = SAFE_FILENAME_RE.sub("_", Path(f.filename or "upload").name)
+    safe_name = f"{prefix}_{raw_name}"
     dest = dest_dir / safe_name
     written = 0
     with dest.open("wb") as out:

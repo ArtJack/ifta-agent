@@ -82,6 +82,7 @@ def run_forever(
     submissions_dir: Path,
     *,
     poll_interval_seconds: float = 5.0,
+    stale_running_timeout_seconds: int = 900,
     on_success: SuccessCallback | None = None,
     on_failure: FailureCallback | None = None,
 ) -> None:
@@ -92,6 +93,23 @@ def run_forever(
         submissions_dir,
         poll_interval_seconds,
     )
+
+    # Recover any submissions left in RUNNING by a previous crashed worker.
+    # Failure emails fire here so customers learn their submission didn't
+    # complete instead of waiting forever.
+    reaped = db.reap_stale_running(
+        db_path, max_seconds_running=stale_running_timeout_seconds
+    )
+    for reaped_sub in reaped:
+        log.warning(
+            "reaped stale RUNNING submission %s — marking failed", reaped_sub.id
+        )
+        if on_failure:
+            try:
+                on_failure(reaped_sub, reaped_sub.error or "worker crashed mid-job")
+            except Exception:
+                log.exception("on_failure callback raised for reaped %s", reaped_sub.id)
+
     while True:
         try:
             sub = process_one_job(
@@ -100,8 +118,10 @@ def run_forever(
                 on_success=on_success,
                 on_failure=on_failure,
             )
+            if sub is None:
+                # Sleep inside the try so Ctrl-C during the idle wait exits
+                # cleanly instead of dumping a stack trace to the operator.
+                time.sleep(poll_interval_seconds)
         except KeyboardInterrupt:
             log.info("worker stopping (Ctrl-C)")
             return
-        if sub is None:
-            time.sleep(poll_interval_seconds)
