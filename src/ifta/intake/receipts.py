@@ -250,7 +250,16 @@ def find_duplicate(
             continue
         if candidate.state and tx.state and candidate.state.upper() != tx.state.upper():
             continue
-        if _same_text(candidate.vendor, tx.vendor) or _same_text(candidate.city, tx.city):
+        # Vendor is the primary soft signal: when both records name a vendor,
+        # they must agree. City alone is too weak — different fuel stops in
+        # the same city on the same day can otherwise produce false matches —
+        # so we only fall back to a city match when at least one side has no
+        # vendor on record.
+        if candidate.vendor and tx.vendor:
+            if _same_text(candidate.vendor, tx.vendor):
+                return tx
+            continue
+        if _same_text(candidate.city, tx.city):
             return tx
     return None
 

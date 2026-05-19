@@ -378,7 +378,10 @@ def _enforce_deterministic_filing_status(
     expected = _string_or_empty(filing_status.get("status"))
     reasons = _as_strings(filing_status.get("reasons"))
     if not expected:
-        return
+        # The packet must always carry a status (DO_NOT_FILE / READY_WITH_WARNINGS
+        # / READY_TO_FILE). An empty value means the packet is malformed; fail
+        # loud rather than letting the model's status pass through unchecked.
+        raise ValueError("review_packet.filing_status.status is empty")
 
     model_status = _string_or_empty(note.filing_status)
     if model_status and model_status != expected:
