@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from ifta.agent.runner import ReviewNote, _enforce_deterministic_filing_status
 from ifta.calc import compute_return
 from ifta.client import ClientContext
@@ -98,3 +100,37 @@ def test_deterministic_status_overrides_model_status() -> None:
     assert note.filing_status_reasons == ["[RATE_FALLBACK] Fallback rates used."]
     assert note.issues
     assert note.issues[0]["code"] == "FILING_STATUS_OVERRIDE"
+
+
+def test_empty_packet_status_raises_rather_than_silently_bypassing() -> None:
+    note = ReviewNote(
+        summary="Looks ready.",
+        issues=[],
+        filing_reminders=[],
+        next_steps=[],
+        filing_status="READY_TO_FILE",
+    )
+
+    with pytest.raises(ValueError, match="filing_status.status is empty"):
+        _enforce_deterministic_filing_status(note, {"status": "", "reasons": []})
+
+
+def test_packet_status_enforced_when_model_omits_status() -> None:
+    note = ReviewNote(
+        summary="No opinion offered.",
+        issues=[],
+        filing_reminders=[],
+        next_steps=[],
+        filing_status=None,
+    )
+
+    _enforce_deterministic_filing_status(
+        note,
+        {
+            "status": "DO_NOT_FILE",
+            "reasons": ["[RATE_FALLBACK] Fallback rates used."],
+        },
+    )
+
+    assert note.filing_status == "DO_NOT_FILE"
+    assert note.filing_status_reasons == ["[RATE_FALLBACK] Fallback rates used."]

@@ -5,6 +5,7 @@ from datetime import date
 from ifta.intake.receipts import (
     ExistingFuelTransaction,
     ReceiptCandidate,
+    find_duplicate,
     receipt_review_table,
     review_receipt,
 )
@@ -273,3 +274,78 @@ def test_receipt_review_table_is_compact() -> None:
             "duplicate_source": None,
         }
     ]
+
+
+def test_find_duplicate_rejects_different_vendor_same_city() -> None:
+    candidate = ReceiptCandidate(
+        source_file="shell_receipt.jpg",
+        date="2026-01-12",
+        vendor="Shell",
+        city="Phoenix",
+        state="AZ",
+        gallons=80.0,
+        amount=360.0,
+    )
+    existing = [
+        ExistingFuelTransaction(
+            date="2026-01-12",
+            vendor="Speedway",
+            city="Phoenix",
+            state="AZ",
+            gallons=80.0,
+            amount=360.10,
+            source_file="fuel_report.xlsx",
+        )
+    ]
+
+    assert find_duplicate(candidate, existing) is None
+
+
+def test_find_duplicate_matches_when_only_one_side_has_vendor() -> None:
+    candidate = ReceiptCandidate(
+        source_file="receipt.jpg",
+        date="2026-01-12",
+        vendor="Shell",
+        city="Phoenix",
+        state="AZ",
+        gallons=80.0,
+        amount=360.0,
+    )
+    existing = [
+        ExistingFuelTransaction(
+            date="2026-01-12",
+            vendor=None,
+            city="Phoenix",
+            state="AZ",
+            gallons=80.0,
+            amount=360.0,
+            source_file="fuel_report.xlsx",
+        )
+    ]
+
+    assert find_duplicate(candidate, existing) is existing[0]
+
+
+def test_find_duplicate_matches_when_vendors_agree() -> None:
+    candidate = ReceiptCandidate(
+        source_file="receipt.jpg",
+        date="2026-01-12",
+        vendor="Shell",
+        city="Phoenix",
+        state="AZ",
+        gallons=80.0,
+        amount=360.0,
+    )
+    existing = [
+        ExistingFuelTransaction(
+            date="2026-01-12",
+            vendor="shell",
+            city="Phoenix",
+            state="AZ",
+            gallons=80.0,
+            amount=360.0,
+            source_file="fuel_report.xlsx",
+        )
+    ]
+
+    assert find_duplicate(candidate, existing) is existing[0]
