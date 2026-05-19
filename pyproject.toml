@@ -27,6 +27,7 @@ dependencies = [
     "rich>=13.0",
     "slowapi>=0.1.9",
     "uvicorn[standard]>=0.34",
+    "xlrd>=2.0",
 ]
 
 [project.optional-dependencies]
