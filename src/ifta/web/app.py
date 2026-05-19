@@ -11,6 +11,7 @@ Run with: `ifta web` (uvicorn factory mode).
 
 from __future__ import annotations
 
+import contextlib
 import html
 import os
 import re
@@ -28,6 +29,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from ifta.client import quarter_key
+from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
 from ifta.web import db
 from ifta.web.email import EmailClient, load_email_config_from_env
 from ifta.web.models import SubmissionStatus
@@ -99,6 +101,7 @@ def create_app() -> FastAPI:
     max_file_bytes = get_max_file_bytes()
     email_config = load_email_config_from_env()
     email_client = EmailClient(email_config)
+    notifier = AdminNotifier(load_admin_notifier_config())
     turnstile_secret = _turnstile_secret()
 
     db.init_db(db_path)
@@ -218,6 +221,20 @@ def create_app() -> FastAPI:
         if sub is None:
             return HTMLResponse(_html_page("Link not found", _NOT_FOUND_HTML), status_code=404)
         if sub.status == SubmissionStatus.QUEUED:
+            # Never let a notification failure block the customer's UX.
+            with contextlib.suppress(Exception):
+                notifier.send(
+                    format_event(
+                        headline="🟢 IFTA submission confirmed — queued",
+                        source="web intake",
+                        customer=sub.email,
+                        quarter=sub.quarter,
+                        extras={
+                            "Company": sub.company or "—",
+                            "Submission": sub.id,
+                        },
+                    )
+                )
             body = _confirmed_html(sub.email, sub.quarter)
             return HTMLResponse(_html_page("Processing started", body))
         if sub.status in (SubmissionStatus.RUNNING, SubmissionStatus.DONE):
