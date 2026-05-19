@@ -10,7 +10,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -21,11 +21,12 @@ from ifta.agent.metrics import AgentMetrics
 from ifta.agent.prompts import REVIEW_PROMPT_TEMPLATE, SYSTEM_PROMPT
 from ifta.agent.tools import ALL_TOOLS
 from ifta.client import load_client_context, quarter_key
+from ifta.review_packet import build_review_packet
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_EFFORT = "medium"
 DEFAULT_MAX_TOKENS = {"review": 4096, "ask": 2048, "chat": 4096}
 
@@ -44,6 +45,8 @@ class ReviewNote:
     issues: list[ReviewItem]
     filing_reminders: list[ReviewItem]
     next_steps: list[ReviewItem]
+    filing_status: str | None = None
+    filing_status_reasons: list[str] = field(default_factory=list)
 
 
 def _string_or_empty(value: Any) -> str:
@@ -71,13 +74,25 @@ def _as_review_items(value: Any) -> list[ReviewItem]:
     return items
 
 
+def _as_strings(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    return [text for item in raw_items if (text := _string_or_empty(item))]
+
+
 def review_note_from_payload(payload: dict[str, Any]) -> ReviewNote:
     """Normalize model JSON into a ReviewNote without assuming exact item shape."""
+    filing_status = _string_or_empty(payload.get("filing_status") or payload.get("status")) or None
     return ReviewNote(
         summary=_string_or_empty(payload.get("summary")),
         issues=_as_review_items(payload.get("issues")),
         filing_reminders=_as_review_items(payload.get("filing_reminders")),
         next_steps=_as_review_items(payload.get("next_steps")),
+        filing_status=filing_status,
+        filing_status_reasons=_as_strings(
+            payload.get("filing_status_reasons") or payload.get("status_reasons")
+        ),
     )
 
 
@@ -93,11 +108,27 @@ def format_review_item(item: ReviewItem, *, checkbox: bool = False) -> str:
             if title:
                 break
         detail = ""
-        for key in ("detail", "description", "message", "note", "action"):
+        for key in (
+            "claim",
+            "detail",
+            "description",
+            "message",
+            "note",
+            "recommended_action",
+            "action",
+        ):
             detail = _string_or_empty(item.get(key))
             if detail:
                 break
         text = f"{title}: {detail}" if title and detail and title != detail else detail or title
+        if item.get("evidence") is not None:
+            text = (
+                f"{text} Evidence: "
+                f"{json.dumps(item['evidence'], ensure_ascii=False, sort_keys=True)}"
+            ).strip()
+        filing_impact = _string_or_empty(item.get("filing_impact"))
+        if filing_impact:
+            text = f"{text} Impact: {filing_impact}".strip()
         if not text:
             text = json.dumps(item, ensure_ascii=False, sort_keys=True)
         if severity:
@@ -295,9 +326,14 @@ def _run_review_with_retry(
     max_tokens: int | None,
     effort: str,
 ) -> tuple[ReviewNote, AgentMetrics]:
+    from ifta.agent.tools import _load_quarter_full
+
+    data, _, ret, findings, client_context = _load_quarter_full(quarter, client_context_dict.get("client_id"))
+    review_packet = build_review_packet(data, ret, findings, client_context)
     prompt = REVIEW_PROMPT_TEMPLATE.format(
         quarter=quarter,
         client_context=json.dumps(client_context_dict, indent=2),
+        review_packet=json.dumps(review_packet, indent=2),
     )
     text, _, metrics = run_agent(
         prompt,
@@ -330,7 +366,35 @@ def _run_review_with_retry(
                 f"First error: {first_err}\nRetry error: {retry_err}\n"
                 f"Last response:\n{retry_text}"
             ) from retry_err
-    return review_note_from_payload(payload), metrics
+    note = review_note_from_payload(payload)
+    _enforce_deterministic_filing_status(note, review_packet["filing_status"])
+    return note, metrics
+
+
+def _enforce_deterministic_filing_status(
+    note: ReviewNote, filing_status: dict[str, Any]
+) -> None:
+    """Make the deterministic filing gate authoritative over model wording."""
+    expected = _string_or_empty(filing_status.get("status"))
+    reasons = _as_strings(filing_status.get("reasons"))
+    if not expected:
+        return
+
+    model_status = _string_or_empty(note.filing_status)
+    if model_status and model_status != expected:
+        note.issues.insert(
+            0,
+            {
+                "severity": "error" if expected == "DO_NOT_FILE" else "warning",
+                "code": "FILING_STATUS_OVERRIDE",
+                "claim": f"Model returned {model_status}, but deterministic status is {expected}.",
+                "evidence": {"source": "review_packet.filing_status", "value": filing_status},
+                "recommended_action": "Use the deterministic filing status.",
+                "filing_impact": "The model cannot weaken filing-readiness gates.",
+            },
+        )
+    note.filing_status = expected
+    note.filing_status_reasons = reasons
 
 
 def ask(
@@ -432,6 +496,11 @@ def write_review_md(
         )
         out_path.rename(archive)
     lines = ["# IFTA Review Note", "", "## Summary", note.summary, ""]
+    if note.filing_status:
+        lines += ["## Filing status", note.filing_status]
+        if note.filing_status_reasons:
+            lines += ["", *[f"- {reason}" for reason in note.filing_status_reasons]]
+        lines.append("")
     if note.issues:
         lines += ["## Issues", *(f"- {format_review_item(x)}" for x in note.issues), ""]
     if note.filing_reminders:

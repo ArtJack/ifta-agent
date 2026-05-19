@@ -197,7 +197,7 @@ EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max"]
 @click.option("--client", default=None, help="Client id/name, e.g. dm_express or test_logistics")
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -249,6 +249,8 @@ def review(
         f"${agent_metrics.estimated_cost_usd:.4f}[/]"
     )
     console.rule("Review Note")
+    if note.filing_status:
+        console.print(f"[bold]Filing status:[/] {note.filing_status}")
     console.print(f"[bold]Summary:[/] {note.summary}")
     for section, items in [
         ("Issues", note.issues),
@@ -266,7 +268,7 @@ def review(
 @click.option("--client", default=None, help="Client id/name, e.g. dm_express or test_logistics")
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -300,7 +302,7 @@ def ask(
 @main.command()
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -325,10 +327,10 @@ def chat(model: str, max_tokens: int, effort: str) -> None:
 )
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
-    help="Agent model — default is Opus (most precise).",
+    help="Agent model — Sonnet by default; use Opus for high-risk reviews.",
 )
 @click.option("--max-tokens", default=4096, show_default=True)
 @click.option("--effort", default="medium", type=click.Choice(EFFORT_CHOICES), show_default=True)
@@ -462,6 +464,8 @@ def deliver(
             )
 
             console.rule("[bold green]Agent Review")
+            if note.filing_status:
+                console.print(f"[bold]Filing status:[/] {note.filing_status}")
             console.print(f"[bold]Summary:[/] {note.summary}")
             for section, items in [
                 ("Issues", note.issues),

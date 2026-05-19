@@ -13,7 +13,7 @@ A case is a JSON document of this shape:
       "quarter": "Q4-2025",
       "client": "menshikov_llc",
       "question": "...",            // ask only
-      "model": "claude-opus-4-7",   // optional
+      "model": "claude-sonnet-4-6", // optional
       "effort": "low",              // optional
       "max_tokens": 2048,           // optional
       "assertions": {
@@ -48,7 +48,7 @@ from ifta.agent.runner import ReviewNote, ask, review
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CASES_DIR = PROJECT_ROOT / "evals" / "cases"
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_EFFORT = "low"
 DEFAULT_MAX_TOKENS = 2048
 
@@ -306,7 +306,8 @@ def run_case(case: EvalCase) -> CaseResult:
 
 def _serialize_review(note: ReviewNote) -> str:
     """Flatten a ReviewNote to text so substring assertions hit every field."""
-    parts: list[str] = [note.summary or ""]
+    parts: list[str] = [note.filing_status or "", note.summary or ""]
+    parts.extend(note.filing_status_reasons)
     for section in (note.issues, note.filing_reminders, note.next_steps):
         for item in section:
             if isinstance(item, dict):
