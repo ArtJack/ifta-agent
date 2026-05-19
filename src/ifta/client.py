@@ -325,3 +325,123 @@ def get_client_record(project_root: Path, client_id: str) -> ClientRecord | None
     """Look up a registered client by id (or alias)."""
     normalized = normalize_client_id(client_id, project_root)
     return load_registry(project_root).get(normalized)
+
+
+@dataclass
+class ScaffoldResult:
+    client_id: str
+    client_dir: Path
+    inbox_dir: Path | None
+    display_name: str
+    dropped_chars: str  # non-empty if normalization dropped characters
+
+
+class ScaffoldError(ValueError):
+    """Raised when client scaffolding fails for a user-actionable reason."""
+
+
+def scaffold_client(
+    project_root: Path,
+    client_id: str,
+    *,
+    name: str | None = None,
+    base_state: str | None = None,
+    portal: str = "generic",
+    aliases: tuple[str, ...] = (),
+    source_folder: str | None = None,
+    make_inbox: bool = True,
+) -> ScaffoldResult:
+    """Create `data/clients/<id>/{client.json, profile.json}` for a new carrier.
+
+    Returns ScaffoldResult on success. Raises ScaffoldError when the requested
+    id collides with an existing client or normalizes to an empty string.
+    """
+    import json as _json
+    import re as _re
+
+    norm = _re.sub(r"[^a-z0-9]+", "_", client_id.strip().lower()).strip("_")
+    if not norm:
+        raise ScaffoldError("client_id must contain at least one alphanumeric character.")
+
+    # Detect dropped characters (e.g. non-ASCII) so callers can warn the user.
+    input_chars = _re.sub(r"[-_ \s]+", "", client_id.strip().lower())
+    norm_chars = norm.replace("_", "")
+    dropped = "".join(c for c in input_chars if c not in norm_chars) if input_chars != norm_chars else ""
+
+    # Collision check: refuse if `client_id` resolves to an existing registry entry.
+    registry = load_registry(project_root)
+    resolved = normalize_client_id(client_id, project_root)
+    if resolved in registry:
+        existing = registry[resolved]
+        raise ScaffoldError(
+            f"'{client_id}' already resolves to registered client "
+            f"'{existing.client_id}' (name={existing.name!r}, "
+            f"aliases={list(existing.aliases)}). Pick a different id or edit "
+            f"data/clients/{existing.client_id}/ directly."
+        )
+
+    client_dir = project_root / "data" / "clients" / norm
+    if client_dir.exists() and (client_dir / "client.json").exists():
+        raise ScaffoldError(
+            f"Client '{norm}' already exists at {client_dir}. "
+            "Edit client.json directly to update."
+        )
+    client_dir.mkdir(parents=True, exist_ok=True)
+
+    display_name = name or norm.replace("_", " ").upper()
+    client_meta = {
+        "client_id": norm,
+        "name": display_name,
+        "aliases": list(aliases),
+        "base_jurisdiction": (base_state or "").upper() or None,
+        "portal": portal,
+        "profile": norm,
+        "source_folder": source_folder,
+        "profile_path": "profile.json",
+        "history_path": "history.json",
+        "active": True,
+        "notes": f"Onboarded via scaffold_client('{norm}').",
+    }
+    (client_dir / "client.json").write_text(
+        _json.dumps(client_meta, indent=2) + "\n", encoding="utf-8"
+    )
+
+    profile_stub = {
+        "operator": display_name,
+        "base_state": (base_state or "").upper() or None,
+        "portal": portal,
+        "fleet": {"trucks": None, "fuel_type": "Diesel"},
+        "history_window": {"first_quarter": None, "last_quarter": None, "filings_parsed": 0},
+        "comparison_thresholds": {
+            "fleet_mpg": {"min": 0, "max": 99, "tolerance": 0.5},
+            "fleet_miles": {"min": 0, "max": 9_999_999, "low_threshold": 0},
+            "total_tax_due": {"min": -9999, "max": 999_999, "tolerance": 500},
+        },
+        "narrative_for_agent": (
+            f"New client {display_name}, base state "
+            f"{(base_state or '').upper() or 'TBD'}. No history loaded yet — "
+            "populate this file after the first filing."
+        ),
+        "per_quarter_filing_checklist": [
+            "Confirm fleet trucks match the IFTA decal list.",
+            "Verify base-state-specific items (surcharges, weight-distance taxes).",
+            "Cross-check fuel-vendor totals against fuel-card receipts.",
+        ],
+    }
+    (client_dir / "profile.json").write_text(
+        _json.dumps(profile_stub, indent=2) + "\n", encoding="utf-8"
+    )
+
+    inbox_dir: Path | None = None
+    if make_inbox:
+        inbox_dir = project_root / "inbox" / norm
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    reload_registry(project_root)
+    return ScaffoldResult(
+        client_id=norm,
+        client_dir=client_dir,
+        inbox_dir=inbox_dir,
+        display_name=display_name,
+        dropped_chars=dropped,
+    )
