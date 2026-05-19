@@ -40,6 +40,8 @@ def test_review_note_writer_renders_structured_items(tmp_path) -> None:
 def test_review_payload_normalizer_accepts_strings_dicts_and_single_items() -> None:
     note = review_note_from_payload(
         {
+            "filing_status": "READY_WITH_WARNINGS",
+            "filing_status_reasons": ["One warning remains."],
             "summary": "Looks reviewable.",
             "issues": {"id": "rate_fallback", "severity": "warning", "detail": "Rates fell back."},
             "filing_reminders": ["Keep records for 4 years."],
@@ -53,4 +55,6 @@ def test_review_payload_normalizer_accepts_strings_dicts_and_single_items() -> N
     ]
     assert note.filing_reminders == ["Keep records for 4 years."]
     assert note.next_steps == ["Verify current-quarter rates."]
+    assert note.filing_status == "READY_WITH_WARNINGS"
+    assert note.filing_status_reasons == ["One warning remains."]
     assert format_review_item(note.issues[0]) == "[warning] rate_fallback: Rates fell back."

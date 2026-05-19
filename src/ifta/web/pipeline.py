@@ -131,7 +131,7 @@ def _write_agent_review(
     from ifta.agent import review as agent_review
     from ifta.agent import write_review_md
 
-    model = os.environ.get("IFTA_WEB_AGENT_MODEL", "claude-opus-4-7")
+    model = os.environ.get("IFTA_WEB_AGENT_MODEL", "claude-sonnet-4-6")
     effort = os.environ.get("IFTA_WEB_AGENT_EFFORT", "medium")
 
     log.info("running agent review for submission %s (model=%s)", sub.id, model)
