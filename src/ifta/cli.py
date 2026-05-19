@@ -13,7 +13,6 @@ from ifta.client import (
     load_client_context,
     load_registry,
     quarter_key,
-    reload_registry,
     resolve_inbox,
     resolve_output_dir,
 )
@@ -569,6 +568,7 @@ def worker(poll_interval: float, once: bool) -> None:
 
     from dotenv import load_dotenv
 
+    from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
     from ifta.web import db as _db
     from ifta.web import worker as worker_module
     from ifta.web.app import get_db_path, get_submissions_dir
@@ -592,13 +592,50 @@ def worker(poll_interval: float, once: bool) -> None:
     # init_db is idempotent — safe to call here too.
     _db.init_db(db_path)
     email_client = EmailClient(load_email_config_from_env())
+    notifier = AdminNotifier(load_admin_notifier_config())
 
     def on_success(sub: Submission, out_dir: _Path) -> None:
         if email_client.send_packet(sub, out_dir):
             _db.mark_packet_sent(db_path, sub.id)
+        try:
+            notifier.send(
+                format_event(
+                    headline="✅ IFTA packet delivered",
+                    source="web intake",
+                    customer=sub.email,
+                    quarter=sub.quarter,
+                    extras={
+                        "Company": sub.company or "—",
+                        "Submission": sub.id,
+                    },
+                    review_note_path=out_dir / "review_note.md",
+                )
+            )
+        except Exception:
+            logging.getLogger("ifta.web.worker").exception(
+                "admin notify (success) raised for %s", sub.id
+            )
 
     def on_failure(sub: Submission, error: str) -> None:
         email_client.send_failure(sub, error)
+        try:
+            notifier.send(
+                format_event(
+                    headline="❌ IFTA submission failed",
+                    source="web intake",
+                    customer=sub.email,
+                    quarter=sub.quarter,
+                    extras={
+                        "Company": sub.company or "—",
+                        "Submission": sub.id,
+                        "Error": error,
+                    },
+                )
+            )
+        except Exception:
+            logging.getLogger("ifta.web.worker").exception(
+                "admin notify (failure) raised for %s", sub.id
+            )
 
     console.print("[bold]Starting IFTA worker[/]")
     console.print(f"  db:           {db_path}")
@@ -796,108 +833,38 @@ def onboard(
         ifta onboard abc_trucking --name "ABC TRUCKING LLC" --base-state TX \\
             --alias abc --alias "abc trucking"
     """
-    import json
-    import re
+    from ifta.client import ScaffoldError, scaffold_client
 
-    from ifta.client import normalize_client_id
+    try:
+        result = scaffold_client(
+            PROJECT_ROOT,
+            client_id,
+            name=name,
+            base_state=base_state,
+            portal=portal,
+            aliases=aliases,
+            source_folder=source_folder,
+            make_inbox=make_inbox,
+        )
+    except ScaffoldError as e:
+        raise click.ClickException(str(e)) from e
 
-    norm = re.sub(r"[^a-z0-9]+", "_", client_id.strip().lower()).strip("_")
-    if not norm:
-        raise click.ClickException("client_id must contain at least one alphanumeric character.")
-
-    # Warn when non-ASCII (or other unexpected) characters were dropped during
-    # normalization — silently rewriting 'Café-Ω' to 'caf' surprised the user
-    # in QA. Compare the input with separators removed vs the normalized id
-    # with underscores removed; any difference means characters were lost.
-    input_chars = re.sub(r"[-_ \s]+", "", client_id.strip().lower())
-    norm_chars = norm.replace("_", "")
-    if input_chars != norm_chars:
-        dropped = "".join(c for c in input_chars if c not in norm_chars)
+    if result.dropped_chars:
         console.print(
-            f"[yellow]⚠[/] Normalized {client_id!r} → {norm!r} "
-            f"(dropped: {dropped!r}). Pass --alias {client_id!r} if you want "
-            f"the original name to resolve too."
+            f"[yellow]⚠[/] Normalized {client_id!r} → {result.client_id!r} "
+            f"(dropped: {result.dropped_chars!r}). Pass --alias {client_id!r} "
+            "if you want the original name to resolve too."
         )
 
-    # Block alias/id collisions: if `norm` already resolves to a registered
-    # client (either as that client's id or one of its aliases), refuse and
-    # point the user at the existing entry. Without this, `ifta onboard david`
-    # would shadow `dm_express` and route future --client lookups to an empty
-    # stub, silently corrupting per-client data.
-    registry = load_registry(PROJECT_ROOT)
-    resolved = normalize_client_id(client_id, PROJECT_ROOT)
-    if resolved in registry:
-        existing = registry[resolved]
-        raise click.ClickException(
-            f"'{client_id}' already resolves to registered client "
-            f"'{existing.client_id}' (name={existing.name!r}, "
-            f"aliases={list(existing.aliases)}). "
-            f"Pick a different id, or edit data/clients/{existing.client_id}/ "
-            f"directly to update."
-        )
-
-    client_dir = PROJECT_ROOT / "data" / "clients" / norm
-    if client_dir.exists() and (client_dir / "client.json").exists():
-        raise click.ClickException(
-            f"Client '{norm}' already exists at {client_dir}. "
-            "Edit client.json directly to update."
-        )
-    client_dir.mkdir(parents=True, exist_ok=True)
-
-    display_name = name or norm.replace("_", " ").upper()
-    client_meta = {
-        "client_id": norm,
-        "name": display_name,
-        "aliases": list(aliases),
-        "base_jurisdiction": (base_state or "").upper() or None,
-        "portal": portal,
-        "profile": norm,
-        "source_folder": source_folder,
-        "profile_path": "profile.json",
-        "history_path": "history.json",
-        "active": True,
-        "notes": f"Onboarded via `ifta onboard {norm}`.",
-    }
-    (client_dir / "client.json").write_text(
-        json.dumps(client_meta, indent=2) + "\n", encoding="utf-8"
-    )
-
-    profile_stub = {
-        "operator": display_name,
-        "base_state": (base_state or "").upper() or None,
-        "portal": portal,
-        "fleet": {"trucks": None, "fuel_type": "Diesel"},
-        "history_window": {"first_quarter": None, "last_quarter": None, "filings_parsed": 0},
-        "comparison_thresholds": {
-            "fleet_mpg": {"min": 0, "max": 99, "tolerance": 0.5},
-            "fleet_miles": {"min": 0, "max": 9_999_999, "low_threshold": 0},
-            "total_tax_due": {"min": -9999, "max": 999_999, "tolerance": 500},
-        },
-        "narrative_for_agent": (
-            f"New client {display_name}, base state "
-            f"{(base_state or '').upper() or 'TBD'}. No history loaded yet — "
-            "populate this file after the first filing."
-        ),
-        "per_quarter_filing_checklist": [
-            "Confirm fleet trucks match the IFTA decal list.",
-            "Verify base-state-specific items (surcharges, weight-distance taxes).",
-            "Cross-check fuel-vendor totals against fuel-card receipts.",
-        ],
-    }
-    (client_dir / "profile.json").write_text(
-        json.dumps(profile_stub, indent=2) + "\n", encoding="utf-8"
-    )
-
-    if make_inbox:
-        (PROJECT_ROOT / "inbox" / norm).mkdir(parents=True, exist_ok=True)
-
-    reload_registry(PROJECT_ROOT)
-    console.print(f"[green]✓[/] Client '{norm}' scaffolded:")
-    console.print(f"  data/clients/{norm}/client.json")
-    console.print(f"  data/clients/{norm}/profile.json  [dim](stub — fill in once you have data)[/]")
-    if make_inbox:
-        console.print(f"  inbox/{norm}/")
+    console.print(f"[green]✓[/] Client '{result.client_id}' scaffolded:")
+    console.print(f"  data/clients/{result.client_id}/client.json")
     console.print(
-        f"\n[dim]Next: drop raw files into inbox/{norm}/Q<n>-YYYY/, then run "
-        f"`ifta run --client {norm} --quarter Q<n>-YYYY`.[/]"
+        f"  data/clients/{result.client_id}/profile.json  "
+        "[dim](stub — fill in once you have data)[/]"
+    )
+    if result.inbox_dir is not None:
+        console.print(f"  inbox/{result.client_id}/")
+    console.print(
+        f"\n[dim]Next: drop raw files into inbox/{result.client_id}/Q<n>-YYYY/, "
+        f"then run `ifta run --client {result.client_id} --quarter Q<n>-YYYY`.[/]"
     )
