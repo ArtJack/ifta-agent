@@ -16,6 +16,7 @@ PaymentMethod = Literal["fleet_card", "personal_card", "cash", "unknown"]
 ReceiptStatus = Literal[
     "USABLE_CONFIRMED",
     "USABLE_NEEDS_APPROVAL",
+    "USABLE_FLEET_ONLY_NEEDS_ALLOCATION",
     "DUPLICATE_REFERENCE",
     "REJECTED_WRONG_QUARTER",
     "REJECTED_NOT_FUEL",
@@ -23,6 +24,7 @@ ReceiptStatus = Literal[
     "NEEDS_REVIEW_LOW_CONFIDENCE",
     "NEEDS_REVIEW_TRUCK_MISMATCH",
     "NEEDS_REVIEW_TRUCK_UNKNOWN",
+    "NEEDS_REVIEW_LOCATION_OR_TRUCK",
     "NEEDS_REVIEW_LOCATION",
 ]
 IssueSeverity = Literal["error", "warning", "info"]
@@ -81,7 +83,18 @@ class ReceiptReview:
 
     @property
     def requires_human_review(self) -> bool:
-        return self.status.startswith("NEEDS_REVIEW") or self.status == "USABLE_NEEDS_APPROVAL"
+        return self.status.startswith("NEEDS_REVIEW") or self.status in (
+            "USABLE_NEEDS_APPROVAL",
+            "USABLE_FLEET_ONLY_NEEDS_ALLOCATION",
+        )
+
+    @property
+    def can_include_fleet_after_approval(self) -> bool:
+        return self.status in (
+            "USABLE_CONFIRMED",
+            "USABLE_NEEDS_APPROVAL",
+            "USABLE_FLEET_ONLY_NEEDS_ALLOCATION",
+        )
 
 
 def review_receipt(
@@ -294,8 +307,8 @@ def _payment_method_issues(candidate: ReceiptCandidate) -> list[ReceiptIssue]:
             ReceiptIssue(
                 "NON_FLEET_PAYMENT",
                 "warning",
-                "Fuel was paid by cash/personal card. It may be valid, but needs approval "
-                "and truck assignment evidence before inclusion.",
+                "Fuel was paid by cash/personal card. It may be valid fleet fuel, but "
+                "needs approval before inclusion.",
             )
         ]
     if candidate.payment_method == "unknown":
@@ -316,10 +329,19 @@ def _truck_assignment_issue(
     truck_states: dict[str, set[str]],
 ) -> ReceiptIssue | None:
     if not candidate.truck_id:
+        state = candidate.state.upper() if candidate.state else None
+        fleet_states = {s.upper() for states in truck_states.values() for s in states}
+        if state and fleet_states and state not in fleet_states:
+            return ReceiptIssue(
+                "NO_FLEET_MILES_IN_RECEIPT_STATE",
+                "warning",
+                f"Receipt is in {candidate.state}, but no truck has mileage in that state.",
+            )
         return ReceiptIssue(
-            "TRUCK_UNKNOWN",
+            "FLEET_ONLY_TRUCK_UNASSIGNED",
             "warning",
-            "Receipt does not identify a truck/unit. Confirm assignment before inclusion.",
+            "Receipt does not identify a truck/unit. It can support fleet fuel only "
+            "after approval; assign manually before using it for per-truck reports.",
         )
 
     if candidate.card_last4:
@@ -346,6 +368,10 @@ def _status_from_issues(candidate: ReceiptCandidate, issues: list[ReceiptIssue])
     codes = {issue.code for issue in issues}
     if "TRUCK_CARD_MISMATCH" in codes or "TRUCK_STATE_MISMATCH" in codes:
         return "NEEDS_REVIEW_TRUCK_MISMATCH"
+    if "NO_FLEET_MILES_IN_RECEIPT_STATE" in codes:
+        return "NEEDS_REVIEW_LOCATION_OR_TRUCK"
+    if "FLEET_ONLY_TRUCK_UNASSIGNED" in codes:
+        return "USABLE_FLEET_ONLY_NEEDS_ALLOCATION"
     if "TRUCK_UNKNOWN" in codes:
         return "NEEDS_REVIEW_TRUCK_UNKNOWN"
     if "LOW_EXTRACTION_CONFIDENCE" in codes:
@@ -381,6 +407,7 @@ def receipt_review_table(reviews: list[ReceiptReview]) -> list[dict[str, object]
                 "truck_id": candidate.truck_id,
                 "payment_method": candidate.payment_method,
                 "status": review.status,
+                "fleet_only": review.status == "USABLE_FLEET_ONLY_NEEDS_ALLOCATION",
                 "issues": [issue.code for issue in review.issues],
                 "duplicate_source": review.duplicate_of.source_file
                 if review.duplicate_of is not None

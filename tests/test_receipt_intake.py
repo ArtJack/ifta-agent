@@ -58,7 +58,7 @@ def test_cash_receipt_is_valid_evidence_but_needs_approval() -> None:
     assert [issue.code for issue in review.issues] == ["NON_FLEET_PAYMENT"]
 
 
-def test_personal_card_receipt_without_truck_needs_truck_review() -> None:
+def test_personal_card_receipt_without_truck_is_fleet_only_evidence() -> None:
     review = review_receipt(
         ReceiptCandidate(
             source_file="personal_card.jpg",
@@ -72,10 +72,36 @@ def test_personal_card_receipt_without_truck_needs_truck_review() -> None:
         ),
         quarter_start=date(2026, 1, 1),
         quarter_end=date(2026, 3, 31),
+        truck_states={"2015": {"AZ"}, "2017": {"CA"}},
     )
 
-    assert review.status == "NEEDS_REVIEW_TRUCK_UNKNOWN"
-    assert {"NON_FLEET_PAYMENT", "TRUCK_UNKNOWN"} == {issue.code for issue in review.issues}
+    assert review.status == "USABLE_FLEET_ONLY_NEEDS_ALLOCATION"
+    assert review.requires_human_review
+    assert review.can_include_fleet_after_approval
+    assert {"NON_FLEET_PAYMENT", "FLEET_ONLY_TRUCK_UNASSIGNED"} == {
+        issue.code for issue in review.issues
+    }
+
+
+def test_no_truck_receipt_in_state_with_no_fleet_miles_needs_location_or_truck_review() -> None:
+    review = review_receipt(
+        ReceiptCandidate(
+            source_file="personal_card.jpg",
+            date="2026-01-10",
+            vendor="Pilot",
+            state="TX",
+            gallons=80.0,
+            amount=360.0,
+            fuel_type="Diesel",
+            payment_method="personal_card",
+        ),
+        quarter_start=date(2026, 1, 1),
+        quarter_end=date(2026, 3, 31),
+        truck_states={"2015": {"AZ"}, "2017": {"CA"}},
+    )
+
+    assert review.status == "NEEDS_REVIEW_LOCATION_OR_TRUCK"
+    assert "NO_FLEET_MILES_IN_RECEIPT_STATE" in {issue.code for issue in review.issues}
 
 
 def test_wrong_fleet_card_truck_mapping_needs_review() -> None:
@@ -242,6 +268,7 @@ def test_receipt_review_table_is_compact() -> None:
             "truck_id": "2017",
             "payment_method": "cash",
             "status": "USABLE_NEEDS_APPROVAL",
+            "fleet_only": False,
             "issues": ["NON_FLEET_PAYMENT"],
             "duplicate_source": None,
         }
