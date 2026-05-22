@@ -41,7 +41,12 @@ from ifta.client import quarter_key
 from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
 from ifta.web import db
 from ifta.web.email import EmailClient, load_email_config_from_env
+from ifta.web.intake_brief import generate_intake_brief
 from ifta.web.models import SubmissionStatus
+from ifta.web.telegram_approval import (
+    TelegramApprovalClient,
+    load_approval_config,
+)
 from ifta.web.turnstile import verify_token as verify_turnstile_token
 
 log = logging.getLogger("ifta.web.app")
@@ -119,6 +124,8 @@ def create_app() -> FastAPI:
     email_config = load_email_config_from_env()
     email_client = EmailClient(email_config)
     notifier = AdminNotifier(load_admin_notifier_config())
+    approval_config = load_approval_config()
+    approval_client = TelegramApprovalClient(approval_config)
     turnstile_secret = _turnstile_secret()
 
     db.init_db(db_path)
@@ -149,6 +156,10 @@ def create_app() -> FastAPI:
         email: str = Form(...),
         quarter: str = Form(...),
         company: str | None = Form(None),
+        name: str | None = Form(None),
+        base_state: str | None = Form(None),
+        fleet_size: int | None = Form(None),
+        notes: str | None = Form(None),
         # FastAPI Form binding is verbatim — no hyphen↔underscore mapping.
         # Cloudflare's widget emits a hidden input literally named
         # `cf-turnstile-response`, so the alias is required.
@@ -178,17 +189,30 @@ def create_app() -> FastAPI:
         _validate_upload(mileage_file)
         _validate_upload(fuel_file)
 
+        # Sanitise optional text fields.
+        name_clean = (name or "").strip() or None
+        base_state_clean = (base_state or "").strip().upper() or None
+        if base_state_clean and len(base_state_clean) != 2:
+            raise HTTPException(
+                status_code=400,
+                detail="base_state must be a 2-letter state code (e.g. TX)",
+            )
+        notes_clean = (notes or "").strip() or None
+
         sid = uuid.uuid4().hex
         token = secrets.token_urlsafe(32)
         sub_root = submissions_dir / sid
 
-        # With email enabled, customer must click the link to start processing.
-        # In dev (no API key) we skip confirmation so manual testing works.
-        initial_status = (
-            SubmissionStatus.PENDING_CONFIRMATION
-            if email_config.enabled
-            else SubmissionStatus.QUEUED
-        )
+        # Decide the initial status:
+        # - Telegram approval enabled  -> PENDING_APPROVAL  (operator gate)
+        # - Email confirmation enabled  -> PENDING_CONFIRMATION  (legacy flow)
+        # - Neither (dev)               -> QUEUED
+        if approval_config.enabled:
+            initial_status = SubmissionStatus.PENDING_APPROVAL
+        elif email_config.enabled:
+            initial_status = SubmissionStatus.PENDING_CONFIRMATION
+        else:
+            initial_status = SubmissionStatus.QUEUED
 
         # Either every artifact lands (files + DB row) or nothing does. A 413
         # on the second upload, or a UNIQUE collision on confirm_token, would
@@ -206,30 +230,68 @@ def create_app() -> FastAPI:
                 confirm_token=token,
                 company=(company or "").strip() or None,
                 status=initial_status,
+                name=name_clean,
+                base_state=base_state_clean,
+                fleet_size=fleet_size,
+                notes=notes_clean,
             )
         except Exception:
             shutil.rmtree(sub_root, ignore_errors=True)
             raise
 
-        if email_config.enabled and not email_client.send_confirmation(sub):
-                # Don't strand the customer in PENDING_CONFIRMATION with no
-                # way out. Mark FAILED so /status surfaces it and ops can
-                # see what happened.
-                db.mark_failed(
-                    db_path,
-                    sub.id,
-                    error=(
-                        "Couldn't send the confirmation email. "
-                        "Try again in a few minutes or email hello@artjeck.com."
-                    ),
+        # ── Telegram approval path (v2) ─────────────────────────────────
+        if initial_status == SubmissionStatus.PENDING_APPROVAL:
+            # Generate intake brief.
+            with contextlib.suppress(Exception):
+                brief_path, summary = generate_intake_brief(
+                    submissions_dir, sub, inbox_path=inbox,
                 )
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        "Couldn't send confirmation email. "
-                        "Please try again in a few minutes."
-                    ),
+                db.update_intake_brief(
+                    db_path, sub.id, brief_path=brief_path, summary=summary,
                 )
+
+            # Send Telegram approval card to admin(s).
+            summary_text = getattr(sub, "_summary_cache", None) or (
+                (brief_path and summary) or f"New submission from {sub.email}"
+            )
+            with contextlib.suppress(Exception):
+                cards = approval_client.send_approval_card(sub, summary_text)
+                for chat_id, message_id in cards:
+                    db.update_telegram_card(
+                        db_path, sub.id,
+                        message_id=message_id, chat_id=chat_id,
+                    )
+
+            # Send acknowledgement email to customer.
+            if email_config.enabled:
+                email_client.send_acknowledgement(sub)
+
+            return {"submission_id": sub.id, "status": sub.status.value}
+
+        # ── Legacy email-confirmation path ──────────────────────────────
+        if (
+            initial_status == SubmissionStatus.PENDING_CONFIRMATION
+            and not email_client.send_confirmation(sub)
+        ):
+            # Don't strand the customer in PENDING_CONFIRMATION with no
+            # way out. Mark FAILED so /status surfaces it and ops can
+            # see what happened.
+            db.mark_failed(
+                db_path,
+                sub.id,
+                error=(
+                    "Couldn't send the confirmation email. "
+                    "Try again in a few minutes or email hello@artjeck.com."
+                ),
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Couldn't send confirmation email. "
+                    "Please try again in a few minutes."
+                ),
+            )
+
         return {"submission_id": sub.id, "status": sub.status.value}
 
     @app.get("/confirm/{token}", response_class=HTMLResponse)
