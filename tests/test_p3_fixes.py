@@ -181,3 +181,16 @@ def test_system_prompt_includes_data_shape_check() -> None:
     assert "fleet size" in SYSTEM_PROMPT
     assert "client-identity mismatch" in SYSTEM_PROMPT
     assert "DO NOT FILE" in SYSTEM_PROMPT
+
+
+def test_system_prompt_includes_fuel_mileage_domain_knowledge() -> None:
+    """The agent must reason about real trucking-data patterns, not alarm on them."""
+    # Miles-without-fuel in a state is normal (full-tank range).
+    assert "Miles in a state with NO fuel bought there is NORMAL" in SYSTEM_PROMPT
+    # High MPG => missing fuel; low MPG => duplicate fuel.
+    assert "MISSING fuel" in SYSTEM_PROMPT
+    assert "DUPLICATE fuel" in SYSTEM_PROMPT
+    # Cash receipts with no truck/card/driver are still valid evidence.
+    assert "Cash fill-ups" in SYSTEM_PROMPT
+    # Fuel-date gaps are expected, not errors.
+    assert "fuel-date gap" in SYSTEM_PROMPT
