@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import html
+import logging
 import os
 import re
 import secrets
@@ -21,12 +22,20 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exception_handlers import (
+    http_exception_handler as _default_http_handler,
+)
+from fastapi.exception_handlers import (
+    request_validation_exception_handler as _default_validation_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ifta.client import quarter_key
 from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
@@ -34,6 +43,8 @@ from ifta.web import db
 from ifta.web.email import EmailClient, load_email_config_from_env
 from ifta.web.models import SubmissionStatus
 from ifta.web.turnstile import verify_token as verify_turnstile_token
+
+log = logging.getLogger("ifta.web.app")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -94,6 +105,12 @@ def create_app() -> FastAPI:
     limiter = Limiter(key_func=get_remote_address)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+    # The access log records only the status line, never the reason. These
+    # log the failing fields (422) and the HTTPException detail (4xx) before
+    # delegating to FastAPI's default responses — so 400/422 stop being opaque.
+    # Field names and static detail strings only; no submitted values.
+    app.add_exception_handler(RequestValidationError, _logging_validation_handler)
+    app.add_exception_handler(StarletteHTTPException, _logging_http_handler)
     app.add_middleware(SlowAPIMiddleware)
 
     db_path = get_db_path()
@@ -274,6 +291,44 @@ def _rate_limit_handler(_request: Request, exc: Exception) -> JSONResponse:
             )
         },
     )
+
+
+async def _logging_validation_handler(request: Request, exc: Exception) -> Response:
+    """Log which fields failed validation (the 422s), then delegate to default."""
+    assert isinstance(exc, RequestValidationError)
+    fields = sorted(
+        {
+            ".".join(str(p) for p in e.get("loc", ()) if p != "body")
+            for e in exc.errors()
+        }
+    )
+    log.warning(
+        "422 %s %s — invalid/missing fields: %s",
+        request.method,
+        request.url.path,
+        ", ".join(f for f in fields if f) or "(none)",
+    )
+    return await _default_validation_handler(request, exc)
+
+
+async def _logging_http_handler(request: Request, exc: Exception) -> Response:
+    """Log the HTTPException detail for 4xx/5xx, then delegate to default.
+
+    404s log at INFO (probes/favicon are routine noise); everything else 4xx+
+    at WARNING so /submit rejections surface their reason.
+    """
+    assert isinstance(exc, StarletteHTTPException)
+    if exc.status_code >= 400:
+        level = logging.INFO if exc.status_code == 404 else logging.WARNING
+        log.log(
+            level,
+            "%d %s %s — %s",
+            exc.status_code,
+            request.method,
+            request.url.path,
+            exc.detail,
+        )
+    return await _default_http_handler(request, exc)
 
 
 def _html_page(title: str, body: str) -> str:
