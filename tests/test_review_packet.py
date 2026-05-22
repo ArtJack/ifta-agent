@@ -111,7 +111,7 @@ def test_empty_packet_status_raises_rather_than_silently_bypassing() -> None:
         filing_status="READY_TO_FILE",
     )
 
-    with pytest.raises(ValueError, match="filing_status.status is empty"):
+    with pytest.raises(ValueError, match=r"filing_status\.status is empty"):
         _enforce_deterministic_filing_status(note, {"status": "", "reasons": []})
 
 
