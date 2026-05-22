@@ -42,7 +42,7 @@ needed.
 # Compute a quarter
 ifta run --quarter Q1-2026
 
-# Pre-filing review by the AI agent (default: Opus 4.7)
+# Pre-filing review by the AI agent (default: Sonnet 4.6)
 ifta review --quarter Q1-2026
 
 # One-shot question grounded in your data + IFTA rules
@@ -64,7 +64,7 @@ Each agent command takes `--model` and `--effort`:
 
 | Flag | Choices | Notes |
 |---|---|---|
-| `--model` | `claude-opus-4-7` (default), `claude-sonnet-4-6`, `claude-haiku-4-5` | Opus = most precise. Haiku = cheap/fast Q&A. |
+| `--model` | `claude-sonnet-4-6` (default), `claude-opus-4-7`, `claude-haiku-4-5` | Sonnet = normal reviews. Opus = highest-risk reviews. Haiku = cheap/fast Q&A. |
 | `--effort` | `low`, `medium` (default), `high`, `xhigh`, `max` | Thinking depth — higher = more thorough/expensive. |
 | `--max-tokens` | int | Output ceiling per call. Defaults: review 4096, ask 2048, chat 4096. |
 

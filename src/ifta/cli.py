@@ -197,7 +197,7 @@ EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max"]
 @click.option("--client", default=None, help="Client id/name, e.g. dm_express or test_logistics")
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -249,6 +249,8 @@ def review(
         f"${agent_metrics.estimated_cost_usd:.4f}[/]"
     )
     console.rule("Review Note")
+    if note.filing_status:
+        console.print(f"[bold]Filing status:[/] {note.filing_status}")
     console.print(f"[bold]Summary:[/] {note.summary}")
     for section, items in [
         ("Issues", note.issues),
@@ -266,7 +268,7 @@ def review(
 @click.option("--client", default=None, help="Client id/name, e.g. dm_express or test_logistics")
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -300,7 +302,7 @@ def ask(
 @main.command()
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
 )
@@ -325,10 +327,10 @@ def chat(model: str, max_tokens: int, effort: str) -> None:
 )
 @click.option(
     "--model",
-    default="claude-opus-4-7",
+    default="claude-sonnet-4-6",
     type=click.Choice(MODEL_CHOICES),
     show_default=True,
-    help="Agent model — default is Opus (most precise).",
+    help="Agent model — Sonnet by default; use Opus for high-risk reviews.",
 )
 @click.option("--max-tokens", default=4096, show_default=True)
 @click.option("--effort", default="medium", type=click.Choice(EFFORT_CHOICES), show_default=True)
@@ -462,6 +464,8 @@ def deliver(
             )
 
             console.rule("[bold green]Agent Review")
+            if note.filing_status:
+                console.print(f"[bold]Filing status:[/] {note.filing_status}")
             console.print(f"[bold]Summary:[/] {note.summary}")
             for section, items in [
                 ("Issues", note.issues),
@@ -522,6 +526,98 @@ def deliver(
 
         with contextlib.suppress(FileNotFoundError):
             subprocess.run(["open", str(out_dir)], check=False)
+
+
+@main.command(name="intake")
+@click.option("--quarter", required=True, help="e.g. Q1-2026")
+@click.option("--client", default=None, help="Client id/name, e.g. dm_express")
+@click.option("--inbox", default=None, type=click.Path(path_type=Path))
+@click.option("--out", "out_dir", default=None, type=click.Path(path_type=Path))
+@click.option(
+    "--receipt-candidates",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="JSON list of OCR/vision/manual receipt candidates. Defaults to inbox/receipt_candidates.json.",
+)
+def intake(
+    quarter: str,
+    client: str | None,
+    inbox: Path | None,
+    out_dir: Path | None,
+    receipt_candidates: Path | None,
+) -> None:
+    """Inspect a messy customer upload before computing the IFTA return."""
+    from ifta.intake.report import build_intake_payload, write_intake_outputs
+
+    qkey = _parse_quarter(quarter)
+    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
+    out_dir = (out_dir or resolve_output_dir(PROJECT_ROOT, qkey, client)).resolve()
+    receipt_candidates = receipt_candidates or inbox / "receipt_candidates.json"
+    if not receipt_candidates.exists():
+        receipt_candidates = None
+
+    payload, proposals = build_intake_payload(
+        inbox,
+        quarter=qkey,
+        receipt_candidates_path=receipt_candidates,
+    )
+    paths = write_intake_outputs(payload, proposals, out_dir)
+
+    console.rule(f"[bold]IFTA Intake — {qkey}")
+    console.print(f"  inbox:  {inbox}")
+    console.print(f"  out:    {out_dir}")
+    console.print(f"  status: [bold]{payload['status']}[/]")
+    console.print(f"  files:  {len(payload['preflight']['files'])}")
+    console.print(f"  findings: {len(payload['preflight']['findings'])}")
+    console.print(f"  receipt candidates: {len(payload['receipt_reviews'])}")
+    console.print(f"  proposed additions: {len(proposals)}")
+    for label, path in paths.items():
+        console.print(f"  ✓ {label}: {_display_path(path)}")
+
+
+@main.command(name="intake-apply")
+@click.option("--quarter", required=True, help="e.g. Q1-2026")
+@click.option("--client", default=None, help="Client id/name, e.g. dm_express")
+@click.option("--inbox", default=None, type=click.Path(path_type=Path))
+@click.option(
+    "--proposed",
+    default=None,
+    type=click.Path(path_type=Path, exists=True),
+    help="proposed_fuel_additions.csv with approved=yes rows. Defaults to outputs/<quarter>/proposed_fuel_additions.csv.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Derived fuel CSV path. Defaults to inbox/<quarter>/derived_fuel_from_receipts.csv.",
+)
+def intake_apply(
+    quarter: str,
+    client: str | None,
+    inbox: Path | None,
+    proposed: Path | None,
+    out_path: Path | None,
+) -> None:
+    """Apply approved receipt-backed fuel additions into a derived CSV."""
+    from ifta.intake.report import apply_approved_proposals_csv
+
+    qkey = _parse_quarter(quarter)
+    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
+    proposed = (
+        proposed or resolve_output_dir(PROJECT_ROOT, qkey, client) / "proposed_fuel_additions.csv"
+    )
+    out_path = out_path or inbox / "derived_fuel_from_receipts.csv"
+    if not proposed.exists():
+        raise click.ClickException(f"proposed additions CSV not found: {proposed}")
+
+    count = apply_approved_proposals_csv(proposed, out_path)
+    console.rule(f"[bold]IFTA Intake Apply — {qkey}")
+    console.print(f"  proposed: {proposed}")
+    console.print(f"  output:   {out_path}")
+    console.print(f"  approved rows written: {count}")
+    if count == 0:
+        console.print("[yellow]No approved=yes rows were found.[/]")
 
 
 @main.command(name="web")
