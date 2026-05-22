@@ -12,19 +12,24 @@ still gets a packet — just without the AI narrative.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
 
 from ifta.calc import compute_per_truck_lines, compute_return
 from ifta.ingest import ingest_folder
-from ifta.preflight import format_preflight, preflight_inputs
+from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
 from ifta.rates import fetch_rates
 from ifta.report import write_per_truck_filings, write_portal_csv
-from ifta.validator import format_findings, validate
+from ifta.validator import Finding, format_findings, validate
 from ifta.web.models import Submission
 
 log = logging.getLogger("ifta.web.pipeline")
+
+# Machine-readable findings dropped next to the packet so the worker can alert
+# the operator on warnings (not just hard failures) without re-parsing markdown.
+FINDINGS_FILENAME = "findings.json"
 
 
 class PipelineError(Exception):
@@ -87,7 +92,61 @@ def process_submission(
         findings=findings,
         ret=ret,
     )
+    write_findings_json(out_dir / FINDINGS_FILENAME, report=report, findings=findings)
     return out_dir
+
+
+def write_findings_json(
+    path: Path, *, report: PreflightReport, findings: list[Finding]
+) -> None:
+    """Persist preflight + validator findings as a uniform JSON list.
+
+    The worker reads this to decide whether a delivered packet still warrants a
+    'shipped with warnings' alert to the operator (e.g. MPG_HIGH = missing fuel).
+    """
+    items: list[dict[str, str | None]] = [
+        {"source": "preflight", "severity": f.severity, "code": f.code, "message": f.message}
+        for f in report.findings
+    ]
+    items += [
+        {
+            "source": "validator",
+            "severity": f.severity,
+            "code": f.code,
+            "message": f.message,
+            "state": f.state,
+        }
+        for f in findings
+    ]
+    path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+
+
+def load_findings(out_dir: Path) -> list[dict]:
+    """Read findings.json from an output dir; [] if missing/unreadable."""
+    path = out_dir / FINDINGS_FILENAME
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def summarize_warnings(findings: list[dict]) -> list[str]:
+    """Distinct 'CODE (state)' labels for warning/error findings, for alerts."""
+    labels: list[str] = []
+    for f in findings:
+        if f.get("severity") not in ("warning", "error"):
+            continue
+        code = str(f.get("code") or "").strip()
+        if not code:
+            continue
+        state = f.get("state")
+        label = f"{code} ({state})" if state else code
+        if label not in labels:
+            labels.append(label)
+    return labels
 
 
 def _write_review_note(

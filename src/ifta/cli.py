@@ -670,6 +670,7 @@ def worker(poll_interval: float, once: bool) -> None:
     from ifta.web.app import get_db_path, get_submissions_dir
     from ifta.web.email import EmailClient, load_email_config_from_env
     from ifta.web.models import Submission
+    from ifta.web.pipeline import load_findings, summarize_warnings
 
     # override=True so .env always wins over the shell — some launchers
     # (Claude Desktop, certain IDEs) export ANTHROPIC_API_KEY="" as a
@@ -693,17 +694,23 @@ def worker(poll_interval: float, once: bool) -> None:
     def on_success(sub: Submission, out_dir: _Path) -> None:
         if email_client.send_packet(sub, out_dir):
             _db.mark_packet_sent(db_path, sub.id)
+        # Surface warnings (MPG_HIGH = missing fuel, duplicate sources, etc.) so
+        # the operator hears about a shipped-but-questionable packet, not only
+        # hard failures.
+        warnings = summarize_warnings(load_findings(out_dir))
+        headline = "✅ IFTA packet delivered"
+        extras = {"Company": sub.company or "—", "Submission": sub.id}
+        if warnings:
+            headline = f"⚠️ IFTA packet delivered — {len(warnings)} warning(s) to review"
+            extras["Warnings"] = ", ".join(warnings)
         try:
             notifier.send(
                 format_event(
-                    headline="✅ IFTA packet delivered",
+                    headline=headline,
                     source="web intake",
                     customer=sub.email,
                     quarter=sub.quarter,
-                    extras={
-                        "Company": sub.company or "—",
-                        "Submission": sub.id,
-                    },
+                    extras=extras,
                     review_note_path=out_dir / "review_note.md",
                 )
             )
