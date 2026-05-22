@@ -28,6 +28,10 @@ def client(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    # Disable Telegram approval gate so dev-mode goes straight to QUEUED.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web.app import create_app
 
     return TestClient(create_app())
@@ -46,6 +50,10 @@ def email_app(
     monkeypatch.setenv("IFTA_WEB_PUBLIC_BASE_URL", "https://ifta-api.test")
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    # Disable Telegram approval gate so email-confirm path is tested.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
 
     sent: list[dict[str, Any]] = []
 
@@ -171,6 +179,9 @@ def test_submit_rejects_oversize_file(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web.app import create_app
 
     test_client = TestClient(create_app())
@@ -268,6 +279,9 @@ def test_submit_rate_limit_enforced(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "2/minute")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web.app import create_app
 
     test_client = TestClient(create_app())
@@ -298,6 +312,9 @@ def test_submit_with_turnstile_missing_token(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.setenv("TURNSTILE_SECRET_KEY", "0x_test_secret")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web.app import create_app
 
     test_client = TestClient(create_app())
@@ -324,6 +341,9 @@ def test_submit_with_turnstile_bad_token(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.setenv("TURNSTILE_SECRET_KEY", "0x_test_secret")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     # Force the verifier to reject.
     from ifta.web import app as app_module
 
@@ -358,6 +378,9 @@ def test_submit_with_turnstile_valid_token(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.setenv("TURNSTILE_SECRET_KEY", "0x_test_secret")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web import app as app_module
 
     monkeypatch.setattr(app_module, "verify_turnstile_token", lambda *a, **kw: True)
@@ -420,6 +443,9 @@ def test_submit_cleans_up_on_oversize_second_upload(
     monkeypatch.setenv("IFTA_WEB_MAX_FILE_MB", "1")
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
     from ifta.web.app import create_app
 
     test_client = TestClient(create_app())
@@ -474,6 +500,10 @@ def test_submit_confirmation_send_failure_returns_502(
     monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
     monkeypatch.setenv("RESEND_API_KEY", "re_test")
     monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    # Disable Telegram approval so the email-confirm path is tested.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_ADMIN_USER_IDS", raising=False)
 
     from ifta.web import email as email_module
 

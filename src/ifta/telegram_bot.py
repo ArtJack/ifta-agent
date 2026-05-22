@@ -1553,6 +1553,10 @@ CB_CONTACT_APPROVE = "ct-c"         # ct-c:<user_id>:<client>  — approve from 
 CB_PHONE_PREAUTH = "pp-c"           # pp-c:<phone-no-plus>:<client> — phone preauth from contact
 CB_CANCEL = "x"                     # x                        — done/dismiss
 
+# Web-intake submission approval (sent by the FastAPI app, handled here).
+CB_WEB_ACCEPT = "wa"                # wa:<submission_id>       — accept web submission
+CB_WEB_DECLINE = "wd"               # wd:<submission_id>       — decline web submission
+
 
 def _list_pending(project_root: Path) -> list[PendingUser]:
     """Pending users minus any who slipped into approved since being logged."""
@@ -2731,6 +2735,116 @@ def _safe_admin_notify(
         )
 
 
+async def web_approval_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Handle Accept/Decline taps for web-intake submissions.
+
+    The approval card is sent by the FastAPI app via ``TelegramApprovalClient``.
+    This handler runs inside the existing ``ifta telegram-bot`` polling loop so
+    no separate webhook or bot process is needed.
+    """
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    config: BotConfig = context.application.bot_data["config"]
+    actor_id = update.effective_user.id if update.effective_user else None
+    if actor_id is None or actor_id not in config.admin_user_ids:
+        await query.answer("Admin only.", show_alert=True)
+        return
+
+    data = query.data
+    is_accept = data.startswith(f"{CB_WEB_ACCEPT}:")
+    is_decline = data.startswith(f"{CB_WEB_DECLINE}:")
+    if not is_accept and not is_decline:
+        await query.answer("Unknown action.", show_alert=True)
+        return
+
+    submission_id = data.split(":", 1)[1] if ":" in data else ""
+    if not submission_id:
+        await query.answer("Bad payload.", show_alert=True)
+        return
+
+    # Lazy imports to avoid circular deps and keep the import cost out of
+    # unrelated code paths.
+    from ifta.web import db as web_db
+    from ifta.web.app import get_db_path
+    from ifta.web.email import EmailClient, load_email_config_from_env
+    from ifta.web.telegram_approval import TelegramApprovalClient, load_approval_config
+
+    db_path = get_db_path()
+    web_db.init_db(db_path)
+    sub = web_db.get_submission(db_path, submission_id)
+    if sub is None:
+        await query.answer("Submission not found.", show_alert=True)
+        return
+
+    from ifta.web.models import SubmissionStatus as WebSubmissionStatus
+
+    actor_user = update.effective_user
+    decided_by = "unknown"
+    if actor_user is not None:
+        parts = [p for p in [actor_user.first_name, actor_user.last_name] if p]
+        decided_by = " ".join(parts) or f"id={actor_user.id}"
+
+    approval_client = TelegramApprovalClient(load_approval_config())
+    email_client = EmailClient(load_email_config_from_env())
+    chat_id = query.message.chat_id if query.message else None
+    message_id = query.message.message_id if query.message else None
+
+    if is_accept:
+        if sub.status != WebSubmissionStatus.PENDING_APPROVAL:
+            await query.answer(
+                f"Already decided ({sub.status.value}).", show_alert=True
+            )
+            return
+        sub = web_db.approve_submission(db_path, submission_id, decided_by=decided_by)
+        if sub is None:
+            await query.answer("DB error.", show_alert=True)
+            return
+
+        # Edit the Telegram card in-place.
+        if chat_id is not None and message_id is not None:
+            with contextlib.suppress(Exception):
+                approval_client.edit_card_approved(chat_id, message_id, sub, decided_by)
+
+        # Send acknowledgement that processing will start.
+        with contextlib.suppress(Exception):
+            email_client.send_acknowledgement(sub)
+
+        await query.answer("Approved -- queued for processing.")
+        return
+
+    # Decline flow: ask for a reason via a follow-up message.
+    if sub.status != WebSubmissionStatus.PENDING_APPROVAL:
+        await query.answer(
+            f"Already decided ({sub.status.value}).", show_alert=True
+        )
+        return
+
+    # For simplicity, use a default reason. A richer UX would prompt, but
+    # that requires conversational state in the bot. Use a short default and
+    # let the admin type /decline <id> <reason> for custom messages.
+    reason = "Does not meet filing requirements. Please contact hello@artjeck.com."
+    sub = web_db.reject_submission(
+        db_path, submission_id, decided_by=decided_by, reason=reason,
+    )
+    if sub is None:
+        await query.answer("DB error.", show_alert=True)
+        return
+
+    if chat_id is not None and message_id is not None:
+        with contextlib.suppress(Exception):
+            approval_client.edit_card_rejected(
+                chat_id, message_id, sub, decided_by, reason,
+            )
+
+    with contextlib.suppress(Exception):
+        email_client.send_rejection(sub, reason)
+
+    await query.answer("Declined -- customer notified.")
+
+
 def build_application(config: BotConfig) -> Application:
     app = ApplicationBuilder().token(config.token).build()
     app.bot_data["config"] = config
@@ -2778,6 +2892,14 @@ def build_application(config: BotConfig) -> Application:
         CallbackQueryHandler(
             contact_flow_callback,
             pattern=rf"^(?:{CB_CONTACT_APPROVE}:|{CB_PHONE_PREAUTH}:)",
+        )
+    )
+    # Web-intake submission approval (Accept / Decline buttons sent by the
+    # FastAPI app via TelegramApprovalClient).
+    app.add_handler(
+        CallbackQueryHandler(
+            web_approval_callback,
+            pattern=rf"^(?:{CB_WEB_ACCEPT}:|{CB_WEB_DECLINE}:)",
         )
     )
     return app

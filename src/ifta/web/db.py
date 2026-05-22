@@ -28,11 +28,39 @@ CREATE TABLE IF NOT EXISTS submissions (
     confirmed_at TEXT,
     started_at TEXT,
     finished_at TEXT,
-    packet_sent_at TEXT
+    packet_sent_at TEXT,
+    name TEXT,
+    base_state TEXT,
+    fleet_size INTEGER,
+    notes TEXT,
+    intake_brief_path TEXT,
+    intake_summary TEXT,
+    decided_at TEXT,
+    decided_by TEXT,
+    decline_reason TEXT,
+    telegram_message_id INTEGER,
+    telegram_chat_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_confirm_token ON submissions(confirm_token);
 """
+
+# Columns added after the original schema shipped. SQLite has no
+# `ADD COLUMN IF NOT EXISTS`, so we inspect PRAGMA table_info and ALTER any
+# missing column on every init. Order is irrelevant; types match SCHEMA above.
+_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("name", "TEXT"),
+    ("base_state", "TEXT"),
+    ("fleet_size", "INTEGER"),
+    ("notes", "TEXT"),
+    ("intake_brief_path", "TEXT"),
+    ("intake_summary", "TEXT"),
+    ("decided_at", "TEXT"),
+    ("decided_by", "TEXT"),
+    ("decline_reason", "TEXT"),
+    ("telegram_message_id", "INTEGER"),
+    ("telegram_chat_id", "INTEGER"),
+)
 
 
 def _now_iso() -> str:
@@ -40,11 +68,20 @@ def _now_iso() -> str:
 
 
 def init_db(path: Path) -> None:
-    """Create the schema (idempotent) and enable WAL."""
+    """Create the schema (idempotent) and enable WAL.
+
+    Also applies forward-only column migrations so older DBs gain the columns
+    added by the intake-brief / Telegram-approval flow without a manual
+    rebuild step.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
         conn.execute("PRAGMA journal_mode=WAL")
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(submissions)")}
+        for col, col_type in _MIGRATIONS:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE submissions ADD COLUMN {col} {col_type}")
 
 
 @contextmanager
@@ -67,6 +104,10 @@ def create_submission(
     confirm_token: str,
     company: str | None = None,
     status: SubmissionStatus = SubmissionStatus.QUEUED,
+    name: str | None = None,
+    base_state: str | None = None,
+    fleet_size: int | None = None,
+    notes: str | None = None,
 ) -> Submission:
     """Insert a new submission row.
 
@@ -78,8 +119,9 @@ def create_submission(
     with _connect(path) as conn:
         conn.execute(
             "INSERT INTO submissions"
-            " (id, email, quarter, status, confirm_token, company, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " (id, email, quarter, status, confirm_token, company, created_at,"
+            "  name, base_state, fleet_size, notes)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 submission_id,
                 email,
@@ -88,6 +130,10 @@ def create_submission(
                 confirm_token,
                 company,
                 created_at_iso,
+                name,
+                base_state,
+                fleet_size,
+                notes,
             ),
         )
     return Submission(
@@ -98,6 +144,10 @@ def create_submission(
         confirm_token=confirm_token,
         company=company,
         created_at=datetime.fromisoformat(created_at_iso),
+        name=name,
+        base_state=base_state,
+        fleet_size=fleet_size,
+        notes=notes,
     )
 
 
@@ -276,6 +326,105 @@ def list_submissions(
     return [_row_to_submission(r) for r in rows]
 
 
+def approve_submission(
+    path: Path,
+    submission_id: str,
+    *,
+    decided_by: str,
+) -> Submission | None:
+    """Flip PENDING_APPROVAL -> QUEUED when an operator taps Accept."""
+    decided_at = _now_iso()
+    with _connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = ?, decided_at = ?, decided_by = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.QUEUED.value,
+                decided_at,
+                decided_by,
+                submission_id,
+                SubmissionStatus.PENDING_APPROVAL.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            # Already decided or unknown id.
+            row = conn.execute(
+                "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+            ).fetchone()
+            return _row_to_submission(row) if row else None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row else None
+
+
+def reject_submission(
+    path: Path,
+    submission_id: str,
+    *,
+    decided_by: str,
+    reason: str,
+) -> Submission | None:
+    """Flip PENDING_APPROVAL -> REJECTED when an operator taps Decline."""
+    decided_at = _now_iso()
+    reason_short = reason[:2000]
+    with _connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = ?, decided_at = ?, decided_by = ?,"
+            " decline_reason = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.REJECTED.value,
+                decided_at,
+                decided_by,
+                reason_short,
+                submission_id,
+                SubmissionStatus.PENDING_APPROVAL.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            row = conn.execute(
+                "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+            ).fetchone()
+            return _row_to_submission(row) if row else None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row else None
+
+
+def update_telegram_card(
+    path: Path,
+    submission_id: str,
+    *,
+    message_id: int,
+    chat_id: int,
+) -> None:
+    """Store the Telegram message/chat IDs so the card can be edited later."""
+    with _connect(path) as conn:
+        conn.execute(
+            "UPDATE submissions SET telegram_message_id = ?, telegram_chat_id = ?"
+            " WHERE id = ?",
+            (message_id, chat_id, submission_id),
+        )
+
+
+def update_intake_brief(
+    path: Path,
+    submission_id: str,
+    *,
+    brief_path: str,
+    summary: str,
+) -> None:
+    """Store the intake brief path and summary text."""
+    with _connect(path) as conn:
+        conn.execute(
+            "UPDATE submissions SET intake_brief_path = ?, intake_summary = ?"
+            " WHERE id = ?",
+            (brief_path, summary, submission_id),
+        )
+
+
 def _row_to_submission(row: sqlite3.Row) -> Submission:
     def _dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s) if s else None
@@ -293,4 +442,15 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
         started_at=_dt(row["started_at"]),
         finished_at=_dt(row["finished_at"]),
         packet_sent_at=_dt(row["packet_sent_at"]),
+        name=row["name"],
+        base_state=row["base_state"],
+        fleet_size=row["fleet_size"],
+        notes=row["notes"],
+        intake_brief_path=row["intake_brief_path"],
+        intake_summary=row["intake_summary"],
+        decided_at=_dt(row["decided_at"]),
+        decided_by=row["decided_by"],
+        decline_reason=row["decline_reason"],
+        telegram_message_id=row["telegram_message_id"],
+        telegram_chat_id=row["telegram_chat_id"],
     )

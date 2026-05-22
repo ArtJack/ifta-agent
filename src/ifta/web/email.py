@@ -117,6 +117,30 @@ class EmailClient:
             text=text,
         )
 
+    def send_acknowledgement(self, sub: Submission) -> bool:
+        """Sent immediately after upload -- tells the customer an operator will review."""
+        if not self.config.enabled:
+            log.info("email disabled — skipping acknowledgement for %s", sub.id)
+            return False
+        text = _acknowledgement_text(sub)
+        return self._send(
+            to=sub.email,
+            subject=f"We received your {sub.quarter} IFTA files",
+            text=text,
+        )
+
+    def send_rejection(self, sub: Submission, reason: str) -> bool:
+        """Sent when an operator declines the submission."""
+        if not self.config.enabled:
+            log.info("email disabled — skipping rejection email for %s", sub.id)
+            return False
+        text = _rejection_text(sub, reason)
+        return self._send(
+            to=sub.email,
+            subject=f"Your {sub.quarter} IFTA submission was not accepted",
+            text=text,
+        )
+
     # ─── internals ───────────────────────────────────────────────────────
 
     def _send(
@@ -209,5 +233,31 @@ def _failure_text(sub: Submission, error: str) -> str:
         f"{error.strip()}\n\n"
         f"Reply to this email and Eugene will take a look — usually the fix is "
         f"a quick re-upload with the right file format.\n\n"
+        f"— ArtJeck IFTA\n"
+    )
+
+
+def _acknowledgement_text(sub: Submission) -> str:
+    company_line = f" for {sub.company}" if sub.company else ""
+    name_greeting = f"Hi {sub.name},\n\n" if sub.name else "Hi,\n\n"
+    return (
+        f"{name_greeting}"
+        f"We received your mileage and fuel files for {sub.quarter}{company_line}.\n\n"
+        f"An operator will review your submission shortly. Once approved, your "
+        f"IFTA packet will be processed and sent to this address.\n\n"
+        f"If you have questions, reply to this email.\n\n"
+        f"— ArtJeck IFTA\n"
+    )
+
+
+def _rejection_text(sub: Submission, reason: str) -> str:
+    name_greeting = f"Hi {sub.name},\n\n" if sub.name else "Hi,\n\n"
+    return (
+        f"{name_greeting}"
+        f"We reviewed your {sub.quarter} IFTA submission and were unable to "
+        f"accept it at this time.\n\n"
+        f"Reason: {reason.strip()}\n\n"
+        f"You're welcome to re-submit at artjeck.com/ifta once the issue is "
+        f"resolved. Reply to this email if you have questions.\n\n"
         f"— ArtJeck IFTA\n"
     )
