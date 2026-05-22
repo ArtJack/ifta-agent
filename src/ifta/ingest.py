@@ -78,12 +78,14 @@ def _classify_column(header: str) -> str | None:
     for kw in DRIVER_KEYWORDS:
         if kw in h:
             return "driver"
-    for kw in TRUCK_KEYWORDS:
-        if kw in h:
-            return "truck"
+    # State before truck: "State/Province" normalizes to "stateprovince",
+    # which contains "vin" and was previously misclassified as a truck/VIN.
     for kw in STATE_KEYWORDS:
         if kw in h:
             return "state"
+    for kw in TRUCK_KEYWORDS:
+        if kw in h:
+            return "truck"
     for kw in GALLONS_KEYWORDS:
         if kw in h:
             return "gallons"
@@ -263,6 +265,14 @@ def _cell_str(row: pd.Series, col: int) -> str | None:
     return s
 
 
+def _first_nonempty_cell(row: pd.Series) -> str:
+    for value in row.tolist():
+        text = str(value).strip()
+        if text and text.lower() != "nan":
+            return text
+    return ""
+
+
 def _rows_from_block(
     df: pd.DataFrame,
     header_row: int,
@@ -288,6 +298,8 @@ def _rows_from_block(
 
     for r in range(header_row + 1, len(df)):
         row = df.iloc[r]
+        if _first_nonempty_cell(row).upper() == "TOTAL":
+            continue
         state = normalize_state(row.iloc[state_col] if state_col < len(row) else None)
         if not state:
             continue

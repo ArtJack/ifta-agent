@@ -30,6 +30,7 @@ from ifta.ingest import ingest_folder
 from ifta.models import CleanData
 from ifta.preflight import preflight_inputs
 from ifta.rates import RateTable, fetch_rates
+from ifta.review_packet import build_review_packet
 from ifta.validator import Finding, format_findings, load_kb, validate
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -224,6 +225,22 @@ def query_findings(quarter: str, client: str | None = None) -> str:
     """
     _, findings, _ = _load_quarter(quarter, client)
     return format_findings(findings) if findings else "No findings — return looks clean."
+
+
+@beta_tool
+def get_review_packet(quarter: str, client: str | None = None) -> str:
+    """Return the deterministic pre-agent review packet as JSON.
+
+    This is the primary evidence source for pre-filing reviews. It includes
+    computed totals, filing status, rate fallback status, validator findings,
+    top liabilities/credits, truck MPG outliers, and data-shape anomalies.
+
+    Args:
+        quarter: Quarter identifier, e.g. "Q2-2026".
+        client: Optional client id/name when using inbox/<client>/<quarter>/.
+    """
+    data, _, ret, findings, client_context = _load_quarter_full(quarter, client)
+    return json.dumps(build_review_packet(data, ret, findings, client_context), indent=2)
 
 
 @beta_tool
@@ -700,6 +717,7 @@ ALL_TOOLS = [
     inspect_raw_inputs,
     query_return,
     query_findings,
+    get_review_packet,
     query_per_truck,
     compare_to_filing,
     lookup_rate,
