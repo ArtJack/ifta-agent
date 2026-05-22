@@ -92,6 +92,72 @@ def test_send_swallows_network_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     assert n.send("body") is False  # logged and returned, no raise
 
 
+def test_send_includes_reply_markup_when_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "BOT-TOKEN")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "111")
+    cfg = notify.load_admin_notifier_config()
+
+    posts: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> FakeResponse:
+        posts.append({"json": json})
+        return FakeResponse()
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+    n = notify.AdminNotifier(cfg)
+    kb = notify.approval_keyboard("sub-123")
+    assert n.send("body", reply_markup=kb) is True
+    assert posts[0]["json"]["reply_markup"] == kb
+    # No reply_markup key when omitted.
+    assert n.send("body") is True
+    assert "reply_markup" not in posts[1]["json"]
+
+
+def test_approval_keyboard_encodes_actions() -> None:
+    kb = notify.approval_keyboard("sub-123")
+    buttons = kb["inline_keyboard"][0]
+    assert buttons[0]["callback_data"] == "approve:sub-123"
+    assert buttons[1]["callback_data"] == "reject:sub-123"
+
+
+def test_parse_callback_data_roundtrip() -> None:
+    assert notify.parse_callback_data("approve:sub-123") == ("approve", "sub-123")
+    assert notify.parse_callback_data("reject:abc") == ("reject", "abc")
+    assert notify.parse_callback_data("approve:") is None
+    assert notify.parse_callback_data("bogus:sub-123") is None
+    assert notify.parse_callback_data("nonsense") is None
+
+
+def test_format_approval_request_contains_key_facts() -> None:
+    body = notify.format_approval_request(
+        company="BLA BLA Transportation",
+        quarter="Q1-2026",
+        email="ops@blabla.co",
+        trucks=15,
+        summary_lines=["Parsed mileage rows: 1240", "Parsed fuel rows: 89"],
+    )
+    assert "BLA BLA Transportation" in body
+    assert "Q1-2026" in body
+    assert "ops@blabla.co" in body
+    assert "15" in body
+    assert "1240" in body
+    assert "only if you approve" in body
+
+
+def test_format_approval_request_handles_missing_company_and_trucks() -> None:
+    body = notify.format_approval_request(
+        company=None,
+        quarter="Q1-2026",
+        email="ops@blabla.co",
+    )
+    assert "Unknown company" in body
+    assert "Trucks:" not in body
+
+
 def test_format_event_basic_html() -> None:
     msg = notify.format_event(
         headline="✅ IFTA packet delivered",

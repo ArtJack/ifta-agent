@@ -41,7 +41,7 @@ def test_create_submission_persists(db_path: Path) -> None:
         company="ABC Trucking",
     )
     assert sub.id == "abc123"
-    assert sub.status == SubmissionStatus.QUEUED
+    assert sub.status == SubmissionStatus.PENDING_APPROVAL
     assert sub.company == "ABC Trucking"
 
     fetched = db.get_submission(db_path, "abc123")
@@ -102,3 +102,101 @@ def test_confirm_token_unique(db_path: Path) -> None:
             quarter="Q1-2026",
             confirm_token="same-token",
         )
+
+
+def test_approve_submission_flips_pending_to_queued(db_path: Path) -> None:
+    db.create_submission(
+        db_path,
+        submission_id="ap1",
+        email="a@b.co",
+        quarter="Q1-2026",
+        confirm_token="tok-ap1",
+        company="BLA BLA Transportation",
+        trucks=15,
+    )
+    updated = db.approve_submission(db_path, "ap1")
+    assert updated is not None
+    assert updated.status == SubmissionStatus.QUEUED
+    assert updated.approved_at is not None
+    assert updated.trucks == 15
+
+    # Now eligible for the worker.
+    claimed = db.claim_next_queued(db_path)
+    assert claimed is not None
+    assert claimed.id == "ap1"
+
+
+def test_reject_submission_flips_pending_to_rejected(db_path: Path) -> None:
+    db.create_submission(
+        db_path,
+        submission_id="rj1",
+        email="a@b.co",
+        quarter="Q1-2026",
+        confirm_token="tok-rj1",
+    )
+    updated = db.reject_submission(db_path, "rj1")
+    assert updated is not None
+    assert updated.status == SubmissionStatus.REJECTED
+
+    # Rejected rows are never claimed by the worker.
+    assert db.claim_next_queued(db_path) is None
+
+
+def test_approve_is_idempotent_and_safe_on_wrong_state(db_path: Path) -> None:
+    db.create_submission(
+        db_path,
+        submission_id="ap2",
+        email="a@b.co",
+        quarter="Q1-2026",
+        confirm_token="tok-ap2",
+    )
+    first = db.approve_submission(db_path, "ap2")
+    assert first is not None and first.status == SubmissionStatus.QUEUED
+    # Second approve must not re-flip or wipe state — returns row unchanged.
+    second = db.approve_submission(db_path, "ap2")
+    assert second is not None and second.status == SubmissionStatus.QUEUED
+    # Rejecting an already-queued row is a no-op.
+    rejected = db.reject_submission(db_path, "ap2")
+    assert rejected is not None and rejected.status == SubmissionStatus.QUEUED
+
+
+def test_approve_missing_returns_none(db_path: Path) -> None:
+    assert db.approve_submission(db_path, "ghost") is None
+    assert db.reject_submission(db_path, "ghost") is None
+
+
+def test_set_trucks_persists(db_path: Path) -> None:
+    db.create_submission(
+        db_path,
+        submission_id="t1",
+        email="a@b.co",
+        quarter="Q1-2026",
+        confirm_token="tok-t1",
+    )
+    db.set_trucks(db_path, "t1", 7)
+    fetched = db.get_submission(db_path, "t1")
+    assert fetched is not None
+    assert fetched.trucks == 7
+
+
+def test_init_db_migrates_legacy_table(tmp_path: Path) -> None:
+    """A pre-migration DB (no trucks/approved_at) upgrades in place."""
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE submissions ("
+            " id TEXT PRIMARY KEY, email TEXT NOT NULL, quarter TEXT NOT NULL,"
+            " status TEXT NOT NULL, confirm_token TEXT NOT NULL UNIQUE,"
+            " company TEXT, error TEXT, created_at TEXT NOT NULL,"
+            " confirmed_at TEXT, started_at TEXT, finished_at TEXT,"
+            " packet_sent_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO submissions (id, email, quarter, status, confirm_token, created_at)"
+            " VALUES ('old', 'a@b.co', 'Q1-2026', 'queued', 'tok-old', '2026-01-01T00:00:00')"
+        )
+    db.init_db(path)  # must add trucks + approved_at without losing the row
+    fetched = db.get_submission(path, "old")
+    assert fetched is not None
+    assert fetched.trucks is None
+    assert fetched.approved_at is None

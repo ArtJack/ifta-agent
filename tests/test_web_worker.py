@@ -36,6 +36,7 @@ def _create_queued(db_path: Path, sid: str = "s1", quarter: str = "Q1-2026") -> 
         email="customer@example.com",
         quarter=quarter,
         confirm_token=f"tok-{sid}",
+        status=SubmissionStatus.QUEUED,
     )
 
 

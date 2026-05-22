@@ -23,9 +23,11 @@ CREATE TABLE IF NOT EXISTS submissions (
     status TEXT NOT NULL,
     confirm_token TEXT NOT NULL UNIQUE,
     company TEXT,
+    trucks INTEGER,
     error TEXT,
     created_at TEXT NOT NULL,
     confirmed_at TEXT,
+    approved_at TEXT,
     started_at TEXT,
     finished_at TEXT,
     packet_sent_at TEXT
@@ -34,17 +36,28 @@ CREATE INDEX IF NOT EXISTS idx_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_confirm_token ON submissions(confirm_token);
 """
 
+# Columns added after the first schema shipped. Each is applied with
+# ALTER TABLE ADD COLUMN at init so existing databases upgrade in place.
+_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("trucks", "ALTER TABLE submissions ADD COLUMN trucks INTEGER"),
+    ("approved_at", "ALTER TABLE submissions ADD COLUMN approved_at TEXT"),
+)
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
 def init_db(path: Path) -> None:
-    """Create the schema (idempotent) and enable WAL."""
+    """Create the schema (idempotent), apply migrations, and enable WAL."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
         conn.execute("PRAGMA journal_mode=WAL")
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(submissions)")}
+        for column, ddl in _MIGRATIONS:
+            if column not in existing:
+                conn.execute(ddl)
 
 
 @contextmanager
@@ -66,20 +79,22 @@ def create_submission(
     quarter: str,
     confirm_token: str,
     company: str | None = None,
-    status: SubmissionStatus = SubmissionStatus.QUEUED,
+    trucks: int | None = None,
+    status: SubmissionStatus = SubmissionStatus.PENDING_APPROVAL,
 ) -> Submission:
     """Insert a new submission row.
 
-    The default status is QUEUED so Phase 1 submissions are immediately
-    eligible for the worker (Phase 2). Phase 3 will switch the default to
-    PENDING_CONFIRMATION and add the email-confirmation flow.
+    The default status is PENDING_APPROVAL: submissions wait for the operator
+    to approve them (via the Telegram approval bot) before the worker runs the
+    full pipeline. Approval flips the row to QUEUED; rejection flips it to
+    REJECTED. Pass status=QUEUED explicitly to bypass the gate (e.g. tests).
     """
     created_at_iso = _now_iso()
     with _connect(path) as conn:
         conn.execute(
             "INSERT INTO submissions"
-            " (id, email, quarter, status, confirm_token, company, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " (id, email, quarter, status, confirm_token, company, trucks, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 submission_id,
                 email,
@@ -87,6 +102,7 @@ def create_submission(
                 status.value,
                 confirm_token,
                 company,
+                trucks,
                 created_at_iso,
             ),
         )
@@ -97,8 +113,81 @@ def create_submission(
         status=status,
         confirm_token=confirm_token,
         company=company,
+        trucks=trucks,
         created_at=datetime.fromisoformat(created_at_iso),
     )
+
+
+def set_trucks(path: Path, submission_id: str, trucks: int) -> None:
+    """Persist the preflight truck count used in the approval request."""
+    with _connect(path) as conn:
+        conn.execute(
+            "UPDATE submissions SET trucks = ? WHERE id = ?",
+            (trucks, submission_id),
+        )
+
+
+def approve_submission(path: Path, submission_id: str) -> Submission | None:
+    """Flip PENDING_APPROVAL → QUEUED when the operator approves.
+
+    Returns the updated row, or None if the id doesn't exist. If the row is
+    not PENDING_APPROVAL (already approved/rejected/processed), it is returned
+    unchanged so callers can branch on the status.
+    """
+    approved_at = _now_iso()
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["status"] != SubmissionStatus.PENDING_APPROVAL.value:
+            return _row_to_submission(row)
+        conn.execute(
+            "UPDATE submissions SET status = ?, approved_at = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.QUEUED.value,
+                approved_at,
+                submission_id,
+                SubmissionStatus.PENDING_APPROVAL.value,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row)
+
+
+def reject_submission(path: Path, submission_id: str) -> Submission | None:
+    """Flip PENDING_APPROVAL → REJECTED when the operator declines.
+
+    Returns the updated row, or None if the id doesn't exist. A row that is
+    not PENDING_APPROVAL is returned unchanged.
+    """
+    finished_at = _now_iso()
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["status"] != SubmissionStatus.PENDING_APPROVAL.value:
+            return _row_to_submission(row)
+        conn.execute(
+            "UPDATE submissions SET status = ?, finished_at = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.REJECTED.value,
+                finished_at,
+                submission_id,
+                SubmissionStatus.PENDING_APPROVAL.value,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row)
 
 
 def get_submission(path: Path, submission_id: str) -> Submission | None:
@@ -118,12 +207,14 @@ def get_submission_by_token(path: Path, token: str) -> Submission | None:
 
 
 def confirm_submission(path: Path, token: str) -> Submission | None:
-    """Flip PENDING_CONFIRMATION → QUEUED when the customer clicks the email link.
+    """Flip PENDING_CONFIRMATION → PENDING_APPROVAL when the customer clicks the link.
 
-    Returns the updated row, or None if the token doesn't exist. If the row
-    isn't PENDING_CONFIRMATION (already confirmed, or in a later state), the
-    row is returned unchanged — callers should branch on the status to show
-    the right page.
+    Email confirmation proves the address is real; the submission then waits
+    for the operator to approve it (Telegram approval gate) before the worker
+    runs. Returns the updated row, or None if the token doesn't exist. If the
+    row isn't PENDING_CONFIRMATION (already confirmed, or in a later state),
+    the row is returned unchanged — callers branch on status to show the right
+    page and to fire the approval request only on the first transition.
     """
     confirmed_at = _now_iso()
     with _connect(path) as conn:
@@ -138,7 +229,7 @@ def confirm_submission(path: Path, token: str) -> Submission | None:
             "UPDATE submissions SET status = ?, confirmed_at = ?"
             " WHERE confirm_token = ? AND status = ?",
             (
-                SubmissionStatus.QUEUED.value,
+                SubmissionStatus.PENDING_APPROVAL.value,
                 confirmed_at,
                 token,
                 SubmissionStatus.PENDING_CONFIRMATION.value,
@@ -280,6 +371,7 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
     def _dt(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s) if s else None
 
+    keys = row.keys()
     return Submission(
         id=row["id"],
         email=row["email"],
@@ -287,9 +379,11 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
         status=SubmissionStatus(row["status"]),
         confirm_token=row["confirm_token"],
         company=row["company"],
+        trucks=row["trucks"] if "trucks" in keys else None,
         error=row["error"],
         created_at=_dt(row["created_at"]) or datetime.now(UTC),
         confirmed_at=_dt(row["confirmed_at"]),
+        approved_at=_dt(row["approved_at"]) if "approved_at" in keys else None,
         started_at=_dt(row["started_at"]),
         finished_at=_dt(row["finished_at"]),
         packet_sent_at=_dt(row["packet_sent_at"]),

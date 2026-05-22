@@ -29,10 +29,16 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
 from ifta.client import quarter_key
-from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
+from ifta.notify import (
+    AdminNotifier,
+    approval_keyboard,
+    format_approval_request,
+    load_admin_notifier_config,
+)
+from ifta.preflight import preflight_inputs
 from ifta.web import db
 from ifta.web.email import EmailClient, load_email_config_from_env
-from ifta.web.models import SubmissionStatus
+from ifta.web.models import Submission, SubmissionStatus
 from ifta.web.turnstile import verify_token as verify_turnstile_token
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -106,6 +112,38 @@ def create_app() -> FastAPI:
 
     db.init_db(db_path)
 
+    def _enter_approval_gate(sub: Submission) -> None:
+        """Run cheap preflight, persist truck count, and ask the operator to approve.
+
+        Never raises: preflight or notification failures must not break the
+        customer's submit/confirm response. The submission simply waits in
+        PENDING_APPROVAL until the operator acts (or re-runs the gate).
+        """
+        inbox = submissions_dir / sub.id / "inbox" / sub.quarter
+        trucks: int | None = None
+        summary_lines: list[str] = []
+        with contextlib.suppress(Exception):
+            report = preflight_inputs(inbox)
+            trucks = len(set(report.trucks_in_miles) | set(report.trucks_in_fuel)) or None
+            summary_lines = [
+                f"Files: {len(report.files)}",
+                f"Mileage rows: {report.mile_rows}",
+                f"Fuel rows: {report.fuel_rows}",
+            ]
+            if trucks is not None:
+                db.set_trucks(db_path, sub.id, trucks)
+        with contextlib.suppress(Exception):
+            notifier.send(
+                format_approval_request(
+                    company=sub.company,
+                    quarter=sub.quarter,
+                    email=sub.email,
+                    trucks=trucks,
+                    summary_lines=summary_lines,
+                ),
+                reply_markup=approval_keyboard(sub.id),
+            )
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -165,12 +203,14 @@ def create_app() -> FastAPI:
         token = secrets.token_urlsafe(32)
         sub_root = submissions_dir / sid
 
-        # With email enabled, customer must click the link to start processing.
-        # In dev (no API key) we skip confirmation so manual testing works.
+        # With email enabled, the customer must click the link first; that
+        # confirmation then drops the row into PENDING_APPROVAL. Without email
+        # (dev / manual testing) we skip straight to PENDING_APPROVAL so the
+        # operator approval gate still applies.
         initial_status = (
             SubmissionStatus.PENDING_CONFIRMATION
             if email_config.enabled
-            else SubmissionStatus.QUEUED
+            else SubmissionStatus.PENDING_APPROVAL
         )
 
         # Either every artifact lands (files + DB row) or nothing does. A 413
@@ -194,7 +234,8 @@ def create_app() -> FastAPI:
             shutil.rmtree(sub_root, ignore_errors=True)
             raise
 
-        if email_config.enabled and not email_client.send_confirmation(sub):
+        if email_config.enabled:
+            if not email_client.send_confirmation(sub):
                 # Don't strand the customer in PENDING_CONFIRMATION with no
                 # way out. Mark FAILED so /status surfaces it and ops can
                 # see what happened.
@@ -213,33 +254,35 @@ def create_app() -> FastAPI:
                         "Please try again in a few minutes."
                     ),
                 )
+        else:
+            # No email step — the row is already PENDING_APPROVAL, so ask the
+            # operator to approve it right away.
+            _enter_approval_gate(sub)
         return {"submission_id": sub.id, "status": sub.status.value}
 
     @app.get("/confirm/{token}", response_class=HTMLResponse)
     def confirm(token: str) -> HTMLResponse:
+        prior = db.get_submission_by_token(db_path, token)
         sub = db.confirm_submission(db_path, token)
         if sub is None:
             return HTMLResponse(_html_page("Link not found", _NOT_FOUND_HTML), status_code=404)
-        if sub.status == SubmissionStatus.QUEUED:
-            # Never let a notification failure block the customer's UX.
-            with contextlib.suppress(Exception):
-                notifier.send(
-                    format_event(
-                        headline="🟢 IFTA submission confirmed — queued",
-                        source="web intake",
-                        customer=sub.email,
-                        quarter=sub.quarter,
-                        extras={
-                            "Company": sub.company or "—",
-                            "Submission": sub.id,
-                        },
-                    )
-                )
-            body = _confirmed_html(sub.email, sub.quarter)
-            return HTMLResponse(_html_page("Processing started", body))
-        if sub.status in (SubmissionStatus.RUNNING, SubmissionStatus.DONE):
+        if sub.status == SubmissionStatus.PENDING_APPROVAL:
+            # Fire the operator approval request only on the first transition,
+            # so re-clicking the email link doesn't re-notify. approve/reject
+            # are idempotent regardless.
+            if prior is not None and prior.status == SubmissionStatus.PENDING_CONFIRMATION:
+                _enter_approval_gate(sub)
+            body = _received_html(sub.email, sub.quarter)
+            return HTMLResponse(_html_page("Submission received", body))
+        if sub.status in (
+            SubmissionStatus.QUEUED,
+            SubmissionStatus.RUNNING,
+            SubmissionStatus.DONE,
+        ):
             body = _already_running_html(sub.email, sub.quarter, sub.status)
-            return HTMLResponse(_html_page("Already processing", body))
+            return HTMLResponse(_html_page("Already received", body))
+        if sub.status == SubmissionStatus.REJECTED:
+            return HTMLResponse(_html_page("Submission declined", _REJECTED_HTML), status_code=200)
         if sub.status == SubmissionStatus.FAILED:
             return HTMLResponse(_html_page("Submission failed", _FAILED_HTML), status_code=200)
         # PENDING_CONFIRMATION shouldn't happen after confirm_submission, but
@@ -291,29 +334,33 @@ def _html_page(title: str, body: str) -> str:
     )
 
 
-def _confirmed_html(email: str, quarter: str) -> str:
+def _received_html(email: str, quarter: str) -> str:
     # Both values are escaped — EMAIL_RE permits HTML-active chars (e.g.
     # `<svg/onload=…>@a.b` passes), so the only protection here is escaping
     # at render time.
     safe_email = html.escape(email)
     safe_quarter = html.escape(quarter)
     return (
-        f"<h1>Got it — processing started</h1>"
-        f"<p>You'll receive your <strong>{safe_quarter}</strong> IFTA packet at "
-        f"<code>{safe_email}</code> in about 5 minutes.</p>"
+        f"<h1>Got it — submission received</h1>"
+        f"<p>Your <strong>{safe_quarter}</strong> files are in. We'll review "
+        f"them and send your IFTA packet to <code>{safe_email}</code> once "
+        f"processing is approved — usually within a few hours.</p>"
         f"<p>The email will include your portal CSV, a review note, and one "
         f"Excel file per truck.</p>"
     )
 
 
 def _already_running_html(email: str, quarter: str, status: SubmissionStatus) -> str:
-    label = (
-        "is already processing" if status == SubmissionStatus.RUNNING else "is ready"
-    )
+    if status == SubmissionStatus.QUEUED:
+        label = "is approved and queued for processing"
+    elif status == SubmissionStatus.RUNNING:
+        label = "is processing now"
+    else:
+        label = "is ready"
     safe_email = html.escape(email)
     safe_quarter = html.escape(quarter)
     return (
-        f"<h1>Already confirmed</h1>"
+        f"<h1>Already received</h1>"
         f"<p>Your <strong>{safe_quarter}</strong> submission {label}. "
         f"Check <code>{safe_email}</code> — the packet should arrive shortly "
         f"(or has already arrived).</p>"
@@ -331,6 +378,13 @@ _FAILED_HTML = (
     "<h1>Couldn't process your files</h1>"
     "<p>The pipeline failed on this submission. Check your inbox for an "
     "email explaining what went wrong, or contact "
+    "<a href='mailto:hello@artjeck.com'>hello@artjeck.com</a>.</p>"
+)
+
+_REJECTED_HTML = (
+    "<h1>Submission not accepted</h1>"
+    "<p>We're unable to process this submission. If you think this is a "
+    "mistake, reply to your confirmation email or contact "
     "<a href='mailto:hello@artjeck.com'>hello@artjeck.com</a>.</p>"
 )
 

@@ -664,6 +664,7 @@ def worker(poll_interval: float, once: bool) -> None:
 
     from dotenv import load_dotenv
 
+    from ifta.backup import archive_inputs, default_archive_root
     from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
     from ifta.web import db as _db
     from ifta.web import worker as worker_module
@@ -693,6 +694,20 @@ def worker(poll_interval: float, once: bool) -> None:
     def on_success(sub: Submission, out_dir: _Path) -> None:
         if email_client.send_packet(sub, out_dir):
             _db.mark_packet_sent(db_path, sub.id)
+        # Reserve a dated copy of the raw inputs (best-effort; never fatal).
+        backed_up: list[_Path] = []
+        try:
+            backed_up = archive_inputs(
+                submissions_dir / sub.id / "inbox" / sub.quarter,
+                archive_root=default_archive_root(submissions_dir),
+                quarter=sub.quarter,
+                company=sub.company,
+                submission_id=sub.id,
+            )
+        except Exception:
+            logging.getLogger("ifta.backup").exception(
+                "input archival raised for %s", sub.id
+            )
         try:
             notifier.send(
                 format_event(
@@ -703,6 +718,7 @@ def worker(poll_interval: float, once: bool) -> None:
                     extras={
                         "Company": sub.company or "—",
                         "Submission": sub.id,
+                        "Backup": f"{len(backed_up)} file(s) archived",
                     },
                     review_note_path=out_dir / "review_note.md",
                 )
@@ -760,11 +776,8 @@ def worker(poll_interval: float, once: bool) -> None:
 
 
 @main.command(name="telegram-bot")
-@click.option("--skip-agent", is_flag=True, help="Run deterministic review only; skip Claude.")
-@click.option("--model", default=None, type=click.Choice(MODEL_CHOICES))
-@click.option("--effort", default=None, type=click.Choice(EFFORT_CHOICES))
-def telegram_bot(skip_agent: bool, model: str | None, effort: str | None) -> None:
-    """Run the Telegram intake bot."""
+def telegram_bot() -> None:
+    """Run the operator approval bot (approve/reject web submissions)."""
     from ifta.telegram_bot import load_bot_config, run_polling
 
     try:
@@ -772,16 +785,11 @@ def telegram_bot(skip_agent: bool, model: str | None, effort: str | None) -> Non
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
 
-    if skip_agent:
-        config.skip_agent = True
-    if model:
-        config.agent_model = model
-    if effort:
-        config.agent_effort = effort
-
-    console.print("[bold]Starting IFTA Telegram bot[/]")
+    console.print("[bold]Starting IFTA approval bot[/]")
     console.print(f"  project: {_display_path(PROJECT_ROOT)}")
-    console.print(f"  agent:   {'skipped' if config.skip_agent else config.agent_model}")
+    console.print(f"  db:      {_display_path(config.db_path)}")
+    admins = ", ".join(str(uid) for uid in config.admin_user_ids) or "[red]none set[/]"
+    console.print(f"  admins:  {admins}")
     console.print("  stop:    Ctrl-C")
     run_polling(config)
 

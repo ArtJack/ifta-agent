@@ -84,7 +84,7 @@ def test_submit_creates_submission_and_saves_files(
     assert r.status_code == 202, r.text
     body = r.json()
     assert "submission_id" in body
-    assert body["status"] == "queued"
+    assert body["status"] == "pending_approval"
 
     sid = body["submission_id"]
     inbox = submissions_root / sid / "inbox" / "Q1-2026"
@@ -111,7 +111,7 @@ def test_status_returns_submission_state(client: TestClient) -> None:
     assert status.status_code == 200
     body = status.json()
     assert body["submission_id"] == sid
-    assert body["status"] == "queued"
+    assert body["status"] == "pending_approval"
     assert body["quarter"] == "Q1-2026"
     assert body["error"] is None
 
@@ -206,7 +206,7 @@ def test_submit_with_email_enabled_starts_pending(
     assert "https://ifta-api.test/confirm/" in sent[0]["text"]
 
 
-def test_confirm_endpoint_flips_to_queued(
+def test_confirm_endpoint_flips_to_pending_approval(
     email_app: tuple[TestClient, list[dict[str, Any]]],
 ) -> None:
     test_client, sent = email_app
@@ -225,10 +225,12 @@ def test_confirm_endpoint_flips_to_queued(
 
     confirm_resp = test_client.get(f"/confirm/{token}")
     assert confirm_resp.status_code == 200
-    assert "Got it" in confirm_resp.text or "processing started" in confirm_resp.text
+    assert "Got it" in confirm_resp.text or "received" in confirm_resp.text
 
+    # Email confirmation proves the address; the row now waits for operator
+    # approval rather than going straight to the worker queue.
     status = test_client.get(f"/status/{sid}").json()
-    assert status["status"] == "queued"
+    assert status["status"] == "pending_approval"
 
 
 def test_confirm_endpoint_unknown_token(client: TestClient) -> None:
@@ -252,10 +254,10 @@ def test_confirm_endpoint_idempotent(
     token = sent[0]["text"].split("/confirm/")[1].split()[0].strip()
     first = test_client.get(f"/confirm/{token}")
     assert first.status_code == 200
-    # Second click is harmless: row stays in QUEUED, same friendly page returns.
+    # Second click is harmless: row stays in PENDING_APPROVAL, friendly page returns.
     second = test_client.get(f"/confirm/{token}")
     assert second.status_code == 200
-    assert "Processing started" in second.text or "Already" in second.text
+    assert "received" in second.text.lower() or "already" in second.text.lower()
 
 
 def test_submit_rate_limit_enforced(
@@ -542,3 +544,57 @@ def test_submit_sanitizes_filename(
     assert "/" not in saved
     assert ".." not in saved
     assert saved.endswith(".csv")
+
+
+def test_submit_fires_operator_approval_request(
+    tmp_path: Path,
+    submissions_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dev-mode submit pushes an approval request to the operator with buttons."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(submissions_root))
+    monkeypatch.setenv("IFTA_WEB_SUBMIT_RATE_LIMIT", "10000/hour")
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "BOT-TOKEN")
+    monkeypatch.setenv("TELEGRAM_ADMIN_CHAT_ID", "42")
+
+    posts: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+        text = "ok"
+
+    def fake_post(url: str, json: dict[str, Any], timeout: float) -> FakeResponse:
+        posts.append(json)
+        return FakeResponse()
+
+    from ifta import notify
+
+    monkeypatch.setattr(notify.requests, "post", fake_post)
+
+    from ifta.web.app import create_app
+
+    test_client = TestClient(create_app())
+    r = test_client.post(
+        "/submit",
+        data={
+            "email": "ops@blabla.co",
+            "quarter": "Q1-2026",
+            "company": "BLA BLA Transportation",
+        },
+        files={
+            "mileage_file": ("m.csv", b"truck,state,miles\nT1,KY,1000\n", "text/csv"),
+            "fuel_file": ("f.csv", b"truck,state,gallons\nT1,KY,150\n", "text/csv"),
+        },
+    )
+    assert r.status_code == 202
+    assert r.json()["status"] == "pending_approval"
+
+    assert posts, "expected an operator approval notification"
+    approval = posts[-1]
+    assert "BLA BLA Transportation" in approval["text"]
+    buttons = approval["reply_markup"]["inline_keyboard"][0]
+    assert buttons[0]["callback_data"].startswith("approve:")
+    assert buttons[1]["callback_data"].startswith("reject:")

@@ -51,7 +51,7 @@ ifta ask --quarter Q1-2026 "Why is California's tax so high?"
 # Interactive chat with full tool access
 ifta chat
 
-# Telegram intake bot (customers upload raw files, bot returns the packet)
+# Operator approval bot (approve/reject web submissions from Telegram)
 ifta telegram-bot
 
 # Just fetch tax rates for a quarter (cache only)
@@ -68,100 +68,58 @@ Each agent command takes `--model` and `--effort`:
 | `--effort` | `low`, `medium` (default), `high`, `xhigh`, `max` | Thinking depth — higher = more thorough/expensive. |
 | `--max-tokens` | int | Output ceiling per call. Defaults: review 4096, ask 2048, chat 4096. |
 
-## Telegram Intake Bot
+## Customer intake + operator approval
 
-The Telegram bot is the customer-facing intake layer. Customers upload raw
-mileage and fuel-card files; the bot saves them into the correct client inbox,
-runs preflight, runs the deterministic IFTA pipeline, runs the review agent,
-and sends back the customer packet.
+Customers submit on the **website** (`ifta web`): they upload their mileage and
+fuel files and an email address. Each submission then waits for **your**
+approval before the (paid) AI pipeline runs:
 
-### Create the bot token
+1. A customer submits files on the web form.
+2. The web app runs a cheap preflight (counts trucks, no AI) and pushes you a
+   Telegram message: *"🚚 BLA BLA Transportation wants an IFTA filing — 15
+   trucks, Q1-2026"* with **[✅ Process]** / **[❌ Reject]** buttons.
+3. Tap **Process** → the worker runs the full pipeline + AI review and emails
+   the customer their packet. Tap **Reject** → nothing runs.
+4. On success, the raw inputs are archived to `data/backups/` and you get a
+   delivery confirmation (with the review summary and backup count).
 
-1. Open Telegram and search for `@BotFather`.
-2. Send `/newbot`.
-3. Pick a display name, for example `Eugene IFTA Bot`.
-4. Pick a username ending in `bot`, for example `eugene_ifta_bot`.
-5. BotFather returns a token that looks like `123456789:ABC...`.
-6. Paste it into `.env`:
+So there are two pieces: the **web app + worker** do the work, and the
+**Telegram approval bot** is your private control surface.
+
+### Telegram approval bot
+
+The bot is admin-only and button-driven — it never receives customer files.
+
+1. Create a bot with `@BotFather` (`/newbot`) and copy its token.
+2. Put the token and your numeric Telegram ID in `.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
+TELEGRAM_ADMIN_USER_IDS=123456789      # only these IDs may approve/reject
+TELEGRAM_ADMIN_CHAT_ID=123456789       # where approval requests are pushed
 ```
 
-Optional admin IDs:
+(Send `/start` to the bot to see your own Telegram ID if you don't know it.)
+
+3. Run the three processes:
 
 ```bash
-TELEGRAM_ADMIN_USER_IDS=123456789
+ifta web           # FastAPI intake (customers submit here)
+ifta worker        # drains approved submissions, emails packets, archives inputs
+ifta telegram-bot  # approval bot: handles the [Process]/[Reject] buttons
 ```
 
-Run the bot:
+Bot commands: `/start` (status + your ID) and `/pending` (re-list submissions
+awaiting a decision). Everything else is the inline approve/reject buttons.
 
-```bash
-ifta telegram-bot
-```
-
-### Approve a customer
-
-The bot is closed by default: a random Telegram user can see their own `/id`,
-but cannot start uploads, list clients, upload files, process returns, or see
-your customer registry. The bot also only works in private Telegram chats so
-customer files are not handled in groups by accident.
-
-Make sure your own Telegram ID is in `.env`:
-
-```bash
-TELEGRAM_ADMIN_USER_IDS=123456789
-```
-
-Then the easiest customer flow is:
-
-```text
-Customer: /request DM Express
-Admin:    /approve 555111222 dm_express
-```
-
-When a customer sends `/request [company]`, the bot messages every admin with
-their Telegram ID and an `/approve ...` command you can paste back into the bot.
-Approvals are saved on the Mac mini in `data/telegram_access.json`, which is
-ignored by Git so customer Telegram IDs are not pushed to GitHub.
-
-The older manual method still works too. Ask each customer to open the bot in a
-private chat and send `/id`, then add that numeric ID only to that customer's
-registry file:
-
-```json
-{
-  "client_id": "dm_express",
-  "telegram_user_ids": [123456789]
-}
-```
-
-One customer can be attached to one client, or to multiple clients if they
-manage several companies. A non-admin user cannot choose or process another
-client unless their Telegram ID is listed in that client's `client.json`.
-
-Then the customer can use:
-
-```text
-/new Q2-2026
-```
-
-They upload CSV, Excel, or PDF files as Telegram documents. When the bot says
-preflight is clean, they send:
-
-```text
-/process
-```
-
-The bot sends back:
+The packet emailed to the customer contains:
 
 - `ifta_portal.csv`
-- `ifta_review.xlsx`
 - `review_note.md`
 - one per-truck Excel file per truck
 
-If current-quarter rates are unavailable, the bot marks the packet as
-`REVIEW REQUIRED` and warns not to upload yet.
+If current-quarter rates are unavailable, the packet is marked `REVIEW
+REQUIRED` and the deterministic gate blocks filing.
 
 ## Project layout
 

@@ -71,7 +71,9 @@ class AdminNotifier:
         self.config = config
         self.timeout = timeout
 
-    def send(self, html_body: str) -> bool:
+    def send(
+        self, html_body: str, *, reply_markup: dict | None = None
+    ) -> bool:
         if not self.config.enabled:
             log.debug("admin notifier disabled — skipping send")
             return False
@@ -80,14 +82,17 @@ class AdminNotifier:
         ok = True
         for chat_id in self.config.chat_ids:
             try:
+                payload: dict = {
+                    "chat_id": chat_id,
+                    "text": body,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                }
+                if reply_markup is not None:
+                    payload["reply_markup"] = reply_markup
                 r = requests.post(
                     url,
-                    json={
-                        "chat_id": chat_id,
-                        "text": body,
-                        "parse_mode": "HTML",
-                        "disable_web_page_preview": True,
-                    },
+                    json=payload,
                     timeout=self.timeout,
                 )
                 if r.status_code != 200:
@@ -136,6 +141,65 @@ def format_event(
         excerpt = _extract_review_excerpt(review_note_path)
         if excerpt:
             lines.append(f"<pre>{html.escape(excerpt)}</pre>")
+    return "\n\n".join(lines)
+
+
+# ─── approval gate ──────────────────────────────────────────────────────────
+
+# callback_data is capped by Telegram at 64 bytes. "approve:" + a UUID (36)
+# leaves comfortable headroom.
+APPROVE_PREFIX = "approve"
+REJECT_PREFIX = "reject"
+
+
+def parse_callback_data(data: str) -> tuple[str, str] | None:
+    """Split callback_data into (action, submission_id), or None if unknown.
+
+    Returns the action only when it is one of the recognised approval actions,
+    so the bot can ignore stray callbacks safely.
+    """
+    action, _, submission_id = data.partition(":")
+    if action in (APPROVE_PREFIX, REJECT_PREFIX) and submission_id:
+        return action, submission_id
+    return None
+
+
+def approval_keyboard(submission_id: str) -> dict:
+    """Inline keyboard with Process / Reject buttons for one submission."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Process", "callback_data": f"{APPROVE_PREFIX}:{submission_id}"},
+                {"text": "❌ Reject", "callback_data": f"{REJECT_PREFIX}:{submission_id}"},
+            ]
+        ]
+    }
+
+
+def format_approval_request(
+    *,
+    company: str | None,
+    quarter: str,
+    email: str,
+    trucks: int | None = None,
+    summary_lines: list[str] | None = None,
+) -> str:
+    """Build the HTML body asking the operator to approve a new submission."""
+    name = company or "Unknown company"
+    lines = [
+        f"<b>🚚 {html.escape(name)} wants an IFTA filing</b>",
+    ]
+    meta = [
+        f"<b>Quarter:</b> {html.escape(quarter)}",
+        f"<b>Contact:</b> {html.escape(email)}",
+    ]
+    if trucks is not None:
+        meta.append(f"<b>Trucks:</b> {trucks}")
+    lines.append("\n".join(meta))
+    if summary_lines:
+        body = "\n".join(html.escape(line) for line in summary_lines)
+        lines.append(f"<pre>{body}</pre>")
+    lines.append("Process this submission? The AI review runs only if you approve.")
     return "\n\n".join(lines)
 
 

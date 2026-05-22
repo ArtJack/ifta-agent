@@ -9,6 +9,8 @@ from enum import StrEnum
 
 class SubmissionStatus(StrEnum):
     PENDING_CONFIRMATION = "pending_confirmation"
+    PENDING_APPROVAL = "pending_approval"
+    REJECTED = "rejected"
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
@@ -24,8 +26,10 @@ class Submission:
     confirm_token: str
     created_at: datetime
     company: str | None = None
+    trucks: int | None = None
     error: str | None = None
     confirmed_at: datetime | None = None
+    approved_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     packet_sent_at: datetime | None = None
