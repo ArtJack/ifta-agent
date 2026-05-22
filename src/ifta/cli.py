@@ -626,6 +626,8 @@ def intake_apply(
 @click.option("--reload", is_flag=True, help="Reload on code changes (dev only).")
 def web(host: str, port: int, reload: bool) -> None:
     """Run the FastAPI web intake server (customer upload endpoint)."""
+    import logging
+
     import uvicorn
     from dotenv import load_dotenv
 
@@ -634,6 +636,15 @@ def web(host: str, port: int, reload: bool) -> None:
     # sandbox, and load_dotenv's default behavior of "don't clobber existing
     # vars" would then silently leave the agent disabled.
     load_dotenv(PROJECT_ROOT / ".env", override=True)
+
+    # uvicorn configures only its own loggers (disable_existing_loggers=False),
+    # so without this the root logger has no handler and our `ifta.web.*` logs
+    # — including turnstile rejections and 4xx reasons — fall through to the
+    # WARNING-only lastResort handler, dropping INFO entirely.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+    )
+
     console.print(f"[bold]Starting IFTA web intake[/] on http://{host}:{port}")
     uvicorn.run(
         "ifta.web.app:create_app",
