@@ -14,7 +14,13 @@ from pathlib import Path
 import pytest
 
 from ifta.web.models import Submission, SubmissionStatus
-from ifta.web.pipeline import PipelineError, process_submission
+from ifta.web.pipeline import (
+    FINDINGS_FILENAME,
+    PipelineError,
+    load_findings,
+    process_submission,
+    summarize_warnings,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = ROOT / "inbox" / "Q4-2025" / "menshikov_miles_and_fuel.csv"
@@ -73,6 +79,41 @@ def test_process_submission_missing_inbox_raises(tmp_path: Path) -> None:
     sub = _make_submission("nope")
     with pytest.raises(PipelineError, match="inbox not found"):
         process_submission(tmp_path, sub)
+
+
+def test_process_submission_writes_findings_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("IFTA_WEB_SKIP_AGENT", "1")
+    sid = "test_findings"
+    _stage_fixture(tmp_path, sid)
+    out_dir = process_submission(tmp_path, _make_submission(sid))
+
+    findings_path = out_dir / FINDINGS_FILENAME
+    assert findings_path.exists()
+    items = load_findings(out_dir)
+    assert isinstance(items, list)
+    # Every item carries a uniform shape regardless of source.
+    for it in items:
+        assert {"source", "severity", "code"} <= set(it)
+
+
+def test_load_findings_missing_returns_empty(tmp_path: Path) -> None:
+    assert load_findings(tmp_path) == []
+
+
+def test_summarize_warnings_dedupes_and_filters_severity() -> None:
+    findings = [
+        {"severity": "info", "code": "OREGON_WMT", "state": "OR"},
+        {"severity": "warning", "code": "FUEL_NO_MILES", "state": "WY"},
+        {"severity": "warning", "code": "FUEL_NO_MILES", "state": "WY"},  # dup
+        {"severity": "warning", "code": "MPG_HIGH", "state": None},
+        {"severity": "error", "code": "DUPLICATE_FUEL_SOURCE"},
+    ]
+    labels = summarize_warnings(findings)
+    assert labels == ["FUEL_NO_MILES (WY)", "MPG_HIGH", "DUPLICATE_FUEL_SOURCE"]
+    # Info-level is excluded.
+    assert all("OREGON_WMT" not in label for label in labels)
 
 
 def test_process_submission_invokes_agent_when_key_present(
