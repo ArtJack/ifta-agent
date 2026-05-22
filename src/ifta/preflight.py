@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from ifta.ingest import ingest_folder
+from ifta.ingest import ingest_file, ingest_folder
+from ifta.validator import load_kb
 
 SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".pdf"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
 PreflightSeverity = Literal["error", "warning", "info"]
 
 
@@ -38,6 +40,10 @@ class FilePreview:
     suffix: str
     size_bytes: int
     note: str = ""  # short description (e.g. "Excel, sheets: X, Y")
+    parsed_mile_rows: int = 0
+    parsed_fuel_rows: int = 0
+    parsed_miles_total: float = 0.0
+    parsed_fuel_total: float = 0.0
 
 
 @dataclass
@@ -51,6 +57,9 @@ class PreflightReport:
     trucks_in_fuel: list[str] = field(default_factory=list)
     mile_rows: int = 0
     fuel_rows: int = 0
+    total_miles: float = 0.0
+    total_gallons: float = 0.0
+    raw_mpg: float = 0.0
     drivers: dict[str, str] = field(default_factory=dict)
     cards: dict[str, str] = field(default_factory=dict)
 
@@ -67,6 +76,10 @@ class PreflightReport:
                     "suffix": f.suffix,
                     "size_bytes": f.size_bytes,
                     "note": f.note,
+                    "parsed_mile_rows": f.parsed_mile_rows,
+                    "parsed_fuel_rows": f.parsed_fuel_rows,
+                    "parsed_miles_total": f.parsed_miles_total,
+                    "parsed_fuel_total": f.parsed_fuel_total,
                 }
                 for f in self.files
             ],
@@ -74,6 +87,9 @@ class PreflightReport:
             "trucks_in_fuel": self.trucks_in_fuel,
             "mile_rows": self.mile_rows,
             "fuel_rows": self.fuel_rows,
+            "total_miles": self.total_miles,
+            "total_gallons": self.total_gallons,
+            "raw_mpg": self.raw_mpg,
             "drivers": self.drivers,
             "cards": self.cards,
             "findings": [f.to_dict() for f in self.findings],
@@ -98,6 +114,8 @@ def _peek_file(path: Path) -> FilePreview:
             note = f"header: {header[:120]}"
         elif suffix == ".pdf":
             note = "pdf"
+        elif suffix in IMAGE_SUFFIXES:
+            note = "image/receipt candidate"
     except Exception as e:
         note = f"couldn't preview: {e}"
     return FilePreview(name=path.name, suffix=suffix, size_bytes=size, note=note)
@@ -129,11 +147,21 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
         )
         return report
 
-    # ---- 2. Each file is a supported format ----
+    # ---- 2. Each file is a supported or known-reference format ----
     for p in files:
         preview = _peek_file(p)
         report.files.append(preview)
-        if preview.suffix not in SUPPORTED_SUFFIXES:
+        if preview.suffix in IMAGE_SUFFIXES:
+            report.findings.append(
+                PreflightFinding(
+                    "warning",
+                    "RECEIPT_IMAGE_UNPARSED",
+                    f"{p.name} looks like a receipt/image. It is saved as reference, "
+                    "but image receipts are not included in mileage or gallons unless "
+                    "they are converted to structured fuel data.",
+                )
+            )
+        elif preview.suffix not in SUPPORTED_SUFFIXES:
             report.findings.append(
                 PreflightFinding(
                     "warning",
@@ -151,10 +179,68 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
                 "No supported file types in the inbox — nothing for the parser "
                 "to read. Drop csv/xlsx/pdf files in and re-run.",
             )
-        )
+            )
         return report
 
-    # ---- 3. Parse and inspect the structure ----
+    # ---- 3. Parse each supported file independently to catch duplicates
+    # and supported-but-unparsed reference exports before the merged ingest.
+    mile_sources: list[str] = []
+    fuel_sources: list[str] = []
+    for preview in report.files:
+        if preview.suffix not in SUPPORTED_SUFFIXES:
+            continue
+        path = inbox / preview.name
+        try:
+            file_data = ingest_file(path)
+        except Exception as e:
+            report.findings.append(
+                PreflightFinding(
+                    "warning",
+                    "FILE_PARSE_FAILED",
+                    f"{preview.name} could not be parsed and will be skipped: {e}",
+                )
+            )
+            continue
+        preview.parsed_mile_rows = len(file_data.miles)
+        preview.parsed_fuel_rows = len(file_data.fuel)
+        preview.parsed_miles_total = round(sum(row.miles for row in file_data.miles), 2)
+        preview.parsed_fuel_total = round(sum(row.gallons for row in file_data.fuel), 3)
+        if file_data.miles:
+            mile_sources.append(preview.name)
+        if file_data.fuel:
+            fuel_sources.append(preview.name)
+        if not file_data.miles and not file_data.fuel:
+            report.findings.append(
+                PreflightFinding(
+                    "warning",
+                    "SUPPORTED_FILE_UNPARSED",
+                    f"{preview.name} is a supported type but no mileage or fuel rows "
+                    "were parsed. Treat it as reference unless the parser is updated.",
+                )
+            )
+
+    if len(mile_sources) > 1:
+        report.findings.append(
+            PreflightFinding(
+                "warning",
+                "MULTIPLE_MILEAGE_SOURCES",
+                f"Multiple files parsed mileage rows: {mile_sources}. Confirm these "
+                "are separate sources, not duplicate summary/detail exports.",
+            )
+        )
+        _add_duplicate_total_findings(report, kind="mileage")
+    if len(fuel_sources) > 1:
+        report.findings.append(
+            PreflightFinding(
+                "warning",
+                "MULTIPLE_FUEL_SOURCES",
+                f"Multiple files parsed fuel rows: {fuel_sources}. Confirm these are "
+                "not duplicate summary/detail exports before filing.",
+            )
+        )
+        _add_duplicate_total_findings(report, kind="fuel")
+
+    # ---- 4. Parse and inspect the merged structure ----
     try:
         data = ingest_folder(inbox)
     except Exception as e:
@@ -171,10 +257,13 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
     report.trucks_in_fuel = sorted({r.truck_id for r in data.fuel})
     report.mile_rows = len(data.miles)
     report.fuel_rows = len(data.fuel)
+    report.total_miles = round(sum(row.miles for row in data.miles), 2)
+    report.total_gallons = round(sum(row.gallons for row in data.fuel), 3)
+    report.raw_mpg = round(report.total_miles / report.total_gallons, 4) if report.total_gallons else 0.0
     report.drivers = dict(data.truck_drivers)
     report.cards = dict(data.truck_cards)
 
-    # ---- 4. Need BOTH miles and fuel data ----
+    # ---- 5. Need BOTH miles and fuel data ----
     if not data.miles:
         report.findings.append(
             PreflightFinding(
@@ -192,7 +281,10 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
             )
         )
 
-    # ---- 5. Truck IDs reconcile between miles and fuel ----
+    if data.miles and data.fuel:
+        _add_raw_mpg_finding(report)
+
+    # ---- 6. Truck IDs reconcile between miles and fuel ----
     miles_set = set(report.trucks_in_miles)
     fuel_set = set(report.trucks_in_fuel)
     only_miles = miles_set - fuel_set
@@ -216,7 +308,7 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
             )
         )
 
-    # ---- 6. "unknown" truck — parser couldn't identify the unit ----
+    # ---- 7. "unknown" truck — parser couldn't identify the unit ----
     if "unknown" in miles_set or "unknown" in fuel_set:
         report.findings.append(
             PreflightFinding(
@@ -227,7 +319,7 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
             )
         )
 
-    # ---- 7. Sanity: very few rows for a full quarter ----
+    # ---- 8. Sanity: very few rows for a full quarter ----
     if data.miles and len(data.miles) < 5:
         report.findings.append(
             PreflightFinding(
@@ -248,6 +340,74 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
         )
 
     return report
+
+
+def _add_duplicate_total_findings(
+    report: PreflightReport, *, kind: Literal["mileage", "fuel"]
+) -> None:
+    """Block likely summary/detail duplicates with identical parsed totals."""
+    seen: dict[float, str] = {}
+    for preview in report.files:
+        if kind == "mileage":
+            if not preview.parsed_mile_rows:
+                continue
+            total = preview.parsed_miles_total
+            code = "DUPLICATE_MILEAGE_SOURCE"
+            unit = "miles"
+        else:
+            if not preview.parsed_fuel_rows:
+                continue
+            total = preview.parsed_fuel_total
+            code = "DUPLICATE_FUEL_SOURCE"
+            unit = "gallons"
+        if total <= 0:
+            continue
+        existing = seen.get(total)
+        if existing is None:
+            seen[total] = preview.name
+            continue
+        report.findings.append(
+            PreflightFinding(
+                "error",
+                code,
+                f"{existing} and {preview.name} both parsed {total:,.2f} {unit}. "
+                "This looks like a duplicate summary/detail export. Remove one "
+                "source or re-run with --force only after manual confirmation.",
+            )
+        )
+
+
+def _add_raw_mpg_finding(report: PreflightReport) -> None:
+    sanity = load_kb()["fleet_mpg_calculation"]["sanity_range"]
+    mpg_lo = float(sanity["min_realistic_heavy_diesel"])
+    mpg_hi = float(sanity["max_realistic_heavy_diesel"])
+    if report.raw_mpg == 0:
+        return
+
+    if report.raw_mpg > mpg_hi:
+        severity: PreflightSeverity = "error" if report.raw_mpg > mpg_hi * 1.2 else "warning"
+        report.findings.append(
+            PreflightFinding(
+                severity,
+                "RAW_MPG_HIGH",
+                f"Raw miles/gallons MPG is {report.raw_mpg:.2f} "
+                f"({report.total_miles:,.0f} miles / {report.total_gallons:,.2f} gal), "
+                f"above the expected heavy-diesel range up to {mpg_hi}. "
+                "This usually means missing fuel files, date-range mismatch, or duplicate miles.",
+            )
+        )
+    elif report.raw_mpg < mpg_lo:
+        severity = "error" if report.raw_mpg < mpg_lo * 0.75 else "warning"
+        report.findings.append(
+            PreflightFinding(
+                severity,
+                "RAW_MPG_LOW",
+                f"Raw miles/gallons MPG is {report.raw_mpg:.2f} "
+                f"({report.total_miles:,.0f} miles / {report.total_gallons:,.2f} gal), "
+                f"below the expected heavy-diesel range starting around {mpg_lo}. "
+                "This usually means missing miles, duplicate fuel, or wrong units.",
+            )
+        )
 
 
 def format_preflight(report: PreflightReport) -> str:
