@@ -324,6 +324,78 @@ def create_app() -> FastAPI:
 
         return {"submission_id": sub.id, "status": sub.status.value}
 
+    @app.post("/submit/add/{token}", status_code=202)
+    @limiter.limit(rate_limit_str)
+    async def submit_add(
+        request: Request,
+        token: str,
+        files: list[UploadFile] = File(default=[]),
+    ) -> dict[str, str]:
+        """Step 8 slice 4 — supplement an existing submission via a magic link.
+
+        The token in the URL is a 32-byte URL-safe secret the customer
+        received in their "Request more files" email. That token IS the
+        auth — anyone with the URL is, by definition, the customer who got
+        the email — so this endpoint deliberately skips the CAPTCHA /
+        backend-key checks /submit requires. CORS still gates browser
+        origins.
+
+        Only PENDING_APPROVAL or NEEDS_MORE_FILES rows can be supplemented;
+        anything else (queued, running, done, rejected, failed) returns 409
+        so the customer knows the window has closed.
+        """
+        if not files:
+            raise HTTPException(status_code=400, detail="at least one file is required")
+        for upload in files:
+            _validate_upload(upload)
+
+        sub = db.get_submission_by_token(db_path, token)
+        if sub is None:
+            raise HTTPException(status_code=404, detail="submission not found")
+        if sub.status not in (
+            SubmissionStatus.PENDING_APPROVAL,
+            SubmissionStatus.NEEDS_MORE_FILES,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Submission is already {sub.status.value}; the add-files "
+                    "window has closed. Start a fresh submission at /ifta/submit."
+                ),
+            )
+
+        inbox = submissions_dir / sub.id / "inbox" / sub.quarter
+        inbox.mkdir(parents=True, exist_ok=True)
+        for upload in files:
+            _save_upload(upload, inbox, max_file_bytes, prefix="file")
+
+        # Reopen for review (NEEDS_MORE_FILES → PENDING_APPROVAL; PENDING_APPROVAL
+        # stays put) and regenerate the intake brief against the updated inbox.
+        sub = db.reopen_for_review(db_path, sub.id) or sub
+        brief_path: str | None = None
+        summary = ""
+        with contextlib.suppress(Exception):
+            brief_path, summary = generate_intake_brief(
+                submissions_dir, sub, inbox_path=inbox,
+            )
+            db.update_intake_brief(
+                db_path, sub.id, brief_path=brief_path, summary=summary,
+            )
+
+        # Fresh Telegram approval card so the operator decides on the new
+        # picture, not the stale one. The old "📩 More files requested" card
+        # stays in the chat as a record of the conversation.
+        summary_text = summary or f"Updated files from {sub.email}"
+        with contextlib.suppress(Exception):
+            cards = approval_client.send_approval_card(sub, summary_text)
+            for chat_id, message_id in cards:
+                db.update_telegram_card(
+                    db_path, sub.id,
+                    message_id=message_id, chat_id=chat_id,
+                )
+
+        return {"submission_id": sub.id, "status": sub.status.value}
+
     @app.get("/confirm/{token}", response_class=HTMLResponse)
     def confirm(token: str) -> HTMLResponse:
         sub = db.confirm_submission(db_path, token)

@@ -116,6 +116,11 @@ class EmailClient:
         renderers as Step 7's failure path but with softer framing — we're
         not telling the customer "we couldn't process this", we're saying
         "we're ready, we just need a bit more first."
+
+        When ``IFTA_PUBLIC_SITE_URL`` is set, the email surfaces a one-click
+        upload link (`{site}/ifta/add/{token}`, Step 8 slice 4) so the
+        customer can supplement their existing submission without re-typing
+        the form.
         """
         if not self.config.enabled:
             log.info("email disabled — skipping more-files request for %s", sub.id)
@@ -125,8 +130,13 @@ class EmailClient:
             render_more_files_request_pdf,
         )
 
-        text = render_more_files_request(sub=sub, intake_brief=intake_brief)
-        report_pdf = render_more_files_request_pdf(sub=sub, intake_brief=intake_brief)
+        add_link = _build_add_link(sub.confirm_token)
+        text = render_more_files_request(
+            sub=sub, intake_brief=intake_brief, add_link=add_link,
+        )
+        report_pdf = render_more_files_request_pdf(
+            sub=sub, intake_brief=intake_brief, add_link=add_link,
+        )
         attachments = [{"filename": "summary_report.pdf", "content": list(report_pdf)}]
         return self._send(
             to=sub.email,
@@ -262,6 +272,21 @@ def _collect_customer_attachments(out_dir: Path) -> Iterable[Path]:
 
 def _to_attachment(path: Path) -> dict[str, Any]:
     return {"filename": path.name, "content": list(path.read_bytes())}
+
+
+def _build_add_link(confirm_token: str) -> str | None:
+    """Construct the one-click 'add more files' magic link.
+
+    Reads IFTA_PUBLIC_SITE_URL (e.g. https://artjeck.com) at call time so
+    dev environments without it set fall through to the no-link copy
+    instead of leaking 'None' or a half-formed URL into customer emails.
+    """
+    import os
+
+    site = (os.environ.get("IFTA_PUBLIC_SITE_URL") or "").strip().rstrip("/")
+    if not site or not confirm_token:
+        return None
+    return f"{site}/ifta/add/{confirm_token}"
 
 
 def _read_customer_note(out_dir: Path) -> str:

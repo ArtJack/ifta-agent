@@ -883,8 +883,19 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
 # stripping and the structured parse.
 
 
-def render_more_files_request(*, sub: Submission, intake_brief: str) -> str:
-    """Short, friendly email body for the operator's 'more files' request."""
+def render_more_files_request(
+    *,
+    sub: Submission,
+    intake_brief: str,
+    add_link: str | None = None,
+) -> str:
+    """Short, friendly email body for the operator's 'more files' request.
+
+    When ``add_link`` is given, the email surfaces it as the *primary*
+    one-click path (no re-uploading existing files, no re-filling the form).
+    Falls back to "reply to email or use the general intake form" copy when
+    the caller didn't construct a link (e.g. dev without the env var).
+    """
     greeting = f"Hi {sub.name}," if sub.name else "Hi,"
     bullets = _humanize_intake_brief_lines(intake_brief)
     lines: list[str] = [greeting, ""]
@@ -903,8 +914,18 @@ def render_more_files_request(*, sub: Submission, intake_brief: str) -> str:
         )
     lines.append("")
     lines.append("How to send what's missing:")
-    lines.append("• Reply to this email with the missing files attached — Eugene reads every one.")
-    lines.append("• Or re-upload everything at https://artjeck.com/ifta/submit")
+    if add_link:
+        lines.append(
+            f"• One-click upload (no re-typing your details): {add_link}"
+        )
+        lines.append(
+            "• Or just reply to this email with the missing files attached."
+        )
+    else:
+        lines.append(
+            "• Reply to this email with the missing files attached — Eugene reads every one."
+        )
+        lines.append("• Or re-upload everything at https://artjeck.com/ifta/submit")
     lines.append("")
     lines.append(
         "Your files are safe on our end — no need to re-send the same ones "
@@ -917,17 +938,29 @@ def render_more_files_request(*, sub: Submission, intake_brief: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_more_files_request_pdf(*, sub: Submission, intake_brief: str) -> bytes:
+def render_more_files_request_pdf(
+    *,
+    sub: Submission,
+    intake_brief: str,
+    add_link: str | None = None,
+) -> bytes:
     """PDF companion to render_more_files_request — same content as the
     detailed customer report, framed as 'a few more pieces needed'."""
-    flow = _build_more_files_flowables(sub=sub, intake_brief=intake_brief)
+    flow = _build_more_files_flowables(
+        sub=sub, intake_brief=intake_brief, add_link=add_link
+    )
     return _build_pdf(
         title=f"IFTA {sub.quarter} — A few more files needed ({sub.company or 'your company'})",
         flow=flow,
     )
 
 
-def _build_more_files_flowables(*, sub: Submission, intake_brief: str) -> list[Any]:
+def _build_more_files_flowables(
+    *,
+    sub: Submission,
+    intake_brief: str,
+    add_link: str | None = None,
+) -> list[Any]:
     from reportlab.platypus import Paragraph, Spacer
 
     s = _pdf_styles()
@@ -964,15 +997,35 @@ def _build_more_files_flowables(*, sub: Submission, intake_brief: str) -> list[A
         )
 
     flow.append(Paragraph("How to send what's missing", s["h2"]))
-    flow.append(Paragraph("• Reply to your packet email with the missing files attached.", s["bullet"]))
-    flow.append(
-        Paragraph(
-            "• Or re-upload everything at "
-            "<link href='https://artjeck.com/ifta/submit' color='#0066cc'>"
-            "https://artjeck.com/ifta/submit</link>",
-            s["bullet"],
+    if add_link:
+        flow.append(
+            Paragraph(
+                "• One-click upload (no re-typing your details): "
+                f"<link href='{_pdf_escape(add_link)}' color='#0066cc'>{_pdf_escape(add_link)}</link>",
+                s["bullet"],
+            )
         )
-    )
+        flow.append(
+            Paragraph(
+                "• Or just reply to your packet email with the missing files attached.",
+                s["bullet"],
+            )
+        )
+    else:
+        flow.append(
+            Paragraph(
+                "• Reply to your packet email with the missing files attached.",
+                s["bullet"],
+            )
+        )
+        flow.append(
+            Paragraph(
+                "• Or re-upload everything at "
+                "<link href='https://artjeck.com/ifta/submit' color='#0066cc'>"
+                "https://artjeck.com/ifta/submit</link>",
+                s["bullet"],
+            )
+        )
     flow.append(Spacer(1, 12))
     flow.append(
         Paragraph(
