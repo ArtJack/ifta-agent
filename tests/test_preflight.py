@@ -145,8 +145,15 @@ def test_missing_fuel_file_flagged(tmp_path: Path) -> None:
         ],
     )
     report = preflight_inputs(tmp_path)
-    assert report.has_errors
+    # Step 8: NO_FUEL is a warning, not a blocker. The pipeline proceeds and
+    # the agent + customer-summary report explain to the carrier that fuel
+    # data is missing and ask for it, rather than dropping the submission
+    # with a developer-style rejection email.
+    assert not report.has_errors
     assert "NO_FUEL" in _codes(report.findings)
+    assert any(
+        f.severity == "warning" and f.code == "NO_FUEL" for f in report.findings
+    )
 
 
 def test_truck_id_mismatch_warns(tmp_path: Path) -> None:
