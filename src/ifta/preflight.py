@@ -102,12 +102,24 @@ def _peek_file(path: Path) -> FilePreview:
     size = path.stat().st_size
     note = ""
     try:
-        if suffix in (".xlsx", ".xlsm", ".xls"):
+        if suffix in (".xlsx", ".xlsm"):
             import openpyxl  # local import: openpyxl is heavy
 
             wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
             note = f"sheets: {', '.join(wb.sheetnames)}"
             wb.close()
+        elif suffix == ".xls":
+            # Old binary Excel format — openpyxl can't read it, so the preview
+            # used to print a scary "couldn't preview" warning even though the
+            # ingester parses .xls fine via xlrd. Use xlrd here too, mirroring
+            # the ingester, so the preview agrees with reality.
+            import xlrd  # local import: xlrd is heavy
+
+            wb = xlrd.open_workbook(str(path), on_demand=True)
+            try:
+                note = f"sheets: {', '.join(wb.sheet_names())}"
+            finally:
+                wb.release_resources()
         elif suffix == ".csv":
             with path.open(encoding="utf-8", errors="replace") as fh:
                 header = fh.readline().strip()
