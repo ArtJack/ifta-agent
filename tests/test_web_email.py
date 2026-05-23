@@ -96,14 +96,26 @@ def test_send_confirmation_includes_link(captured_sends: list[dict[str, Any]]) -
     assert "attachments" not in params
 
 
-def test_send_packet_attaches_all_files(
+def test_send_packet_attaches_only_customer_facing_files(
     captured_sends: list[dict[str, Any]], tmp_path: Path
 ) -> None:
+    """review_note.md / findings.json / customer_note.md are operator-only.
+
+    The customer email only carries the portal CSV + per-truck Excels. The
+    customer-friendly body lives in the email TEXT (sourced from customer_note.md)
+    so the trucker doesn't have to open an attachment to know what's going on.
+    """
     out_dir = tmp_path / "outputs" / "Q1-2026"
     out_dir.mkdir(parents=True)
     (out_dir / "ifta_portal.csv").write_bytes(b"state,miles\nKY,100\n")
     (out_dir / "review_note.md").write_text(
         "# IFTA Review — 1Q2026\n\n- Total tax due: **$123.45**\n", encoding="utf-8"
+    )
+    (out_dir / "findings.json").write_text("[]", encoding="utf-8")
+    (out_dir / "customer_note.md").write_text(
+        "Hi,\n\nYour Q1-2026 IFTA packet is ready. Looks ready to file.\n\n"
+        "Total tax due: $123.45\n",
+        encoding="utf-8",
     )
     trucks = out_dir / "trucks"
     trucks.mkdir()
@@ -115,12 +127,17 @@ def test_send_packet_attaches_all_files(
     params = captured_sends[0]
     assert "Q1-2026" in params["subject"]
     filenames = {a["filename"] for a in params["attachments"]}
-    assert filenames == {"ifta_portal.csv", "review_note.md", "truck_800.xlsx"}
-    # Each attachment carries the actual bytes
+    # Customer gets the portal CSV + truck Excel — and nothing else.
+    assert filenames == {"ifta_portal.csv", "truck_800.xlsx"}
+    assert "review_note.md" not in filenames
+    assert "findings.json" not in filenames
+    assert "customer_note.md" not in filenames
+    # Each attachment carries the actual bytes.
     portal_att = next(a for a in params["attachments"] if a["filename"] == "ifta_portal.csv")
     assert bytes(portal_att["content"]) == b"state,miles\nKY,100\n"
-    # Review note text is embedded in the body for inbox visibility
-    assert "Total tax due: **$123.45**" in params["text"]
+    # Email body uses the friendly customer note, not the dev review note.
+    assert "Looks ready to file" in params["text"]
+    assert "**$123.45**" not in params["text"]  # no markdown bold leakage
 
 
 def test_send_packet_handles_missing_out_dir(captured_sends: list[dict[str, Any]]) -> None:
