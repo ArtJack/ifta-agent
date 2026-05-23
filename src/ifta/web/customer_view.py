@@ -37,7 +37,8 @@ from ifta.validator import Finding
 from ifta.web.models import Submission
 
 CUSTOMER_NOTE_FILENAME = "customer_note.md"
-CUSTOMER_SUMMARY_FILENAME = "summary_report.md"
+CUSTOMER_SUMMARY_FILENAME = "summary_report.pdf"
+CUSTOMER_SUMMARY_PDF_FILENAME = "summary_report.pdf"
 
 _FILING_STATUS_LINE = {
     "READY_TO_FILE": "Looks ready to file.",
@@ -95,7 +96,7 @@ def render_customer_view(
 
     lines.append("Attached:")
     lines.append("• ifta_portal.csv — upload this directly to your state's IFTA portal")
-    lines.append("• summary_report.md — full plain-English breakdown for your records")
+    lines.append("• summary_report.pdf — full plain-English breakdown for your records")
     if truck_count:
         if truck_count == 1:
             lines.append("• trucks/<id>.xlsx — per-truck breakdown")
@@ -452,7 +453,7 @@ def render_customer_failure(*, sub: Submission, error: str) -> str:
     lines.append("")
     lines.append("Your files are safe on our end. We'll pick up the moment we hear back.")
     lines.append("")
-    lines.append("Attached: summary_report.md — full plain-English breakdown for your records.")
+    lines.append("Attached: summary_report.pdf — full plain-English breakdown for your records.")
     lines.append("")
     lines.append("— ArtJeck IFTA")
     return "\n".join(lines) + "\n"
@@ -610,3 +611,279 @@ def _clean_finding_text(text: str) -> str:
     if out and not out.endswith((".", "!", "?")):
         out += "."
     return out
+
+
+# ─── PDF renderers ────────────────────────────────────────────────────────────
+#
+# Customers expect a real document they can open in Preview, print, sign, and
+# archive — a .md file looks like developer output. These renderers consume
+# the same `_structured_problems` / `_structured_tips` / `_humanize_error_sections`
+# helpers as the markdown ones, so the two formats stay in sync.
+
+
+def render_customer_summary_pdf(
+    *,
+    sub: Submission,
+    ret: IftaReturn,
+    note: Any | None = None,
+    findings: list[Finding] | None = None,
+    truck_count: int = 0,
+    attached_files: list[str] | None = None,
+) -> bytes:
+    """PDF companion to render_customer_summary — same content, designed for
+    the customer's email attachment."""
+    flow = _build_summary_flowables(
+        sub=sub,
+        ret=ret,
+        note=note,
+        findings=findings,
+        truck_count=truck_count,
+        attached_files=attached_files,
+    )
+    return _build_pdf(title=f"IFTA {sub.quarter} Summary — {sub.company or 'your company'}", flow=flow)
+
+
+def render_customer_failure_report_pdf(*, sub: Submission, error: str) -> bytes:
+    """PDF companion to render_customer_failure_report."""
+    flow = _build_failure_flowables(sub=sub, error=error)
+    return _build_pdf(
+        title=f"IFTA {sub.quarter} — Couldn't Finish Yet ({sub.company or 'your company'})",
+        flow=flow,
+    )
+
+
+def _build_pdf(*, title: str, flow: list[Any]) -> bytes:
+    """Render a list of reportlab flowables to a PDF, returned as raw bytes."""
+    # Local imports — keep the heavy PDF stack out of import paths that don't
+    # need it (tests, the CLI 'run' subcommand, etc.).
+    from io import BytesIO
+
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=LETTER,
+        title=title,
+        author="ArtJeck IFTA",
+        leftMargin=0.75 * inch,
+        rightMargin=0.75 * inch,
+        topMargin=0.75 * inch,
+        bottomMargin=0.75 * inch,
+    )
+    doc.build(flow)
+    return buf.getvalue()
+
+
+def _pdf_styles() -> dict[str, Any]:
+    """Lazy-load reportlab styles so importing this module is cheap."""
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+
+    base = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle(
+            "Title", parent=base["Title"], fontSize=18, spaceAfter=4, textColor=colors.HexColor("#0a2540")
+        ),
+        "byline": ParagraphStyle(
+            "Byline",
+            parent=base["BodyText"],
+            fontSize=10,
+            textColor=colors.HexColor("#5b6b7c"),
+            spaceAfter=14,
+        ),
+        "status": ParagraphStyle(
+            "Status",
+            parent=base["Heading2"],
+            fontSize=13,
+            textColor=colors.HexColor("#0a8a3a"),
+            spaceBefore=2,
+            spaceAfter=12,
+        ),
+        "h2": ParagraphStyle(
+            "H2",
+            parent=base["Heading2"],
+            fontSize=12,
+            textColor=colors.HexColor("#0a2540"),
+            spaceBefore=12,
+            spaceAfter=6,
+        ),
+        "h3": ParagraphStyle(
+            "H3",
+            parent=base["Heading3"],
+            fontSize=11,
+            textColor=colors.HexColor("#1a3a5a"),
+            spaceBefore=8,
+            spaceAfter=3,
+        ),
+        "body": ParagraphStyle(
+            "Body", parent=base["BodyText"], fontSize=10.5, leading=14, spaceAfter=4
+        ),
+        "small": ParagraphStyle(
+            "Small",
+            parent=base["BodyText"],
+            fontSize=9.5,
+            leading=12,
+            textColor=colors.HexColor("#5b6b7c"),
+            spaceAfter=2,
+        ),
+        "bullet": ParagraphStyle(
+            "Bullet",
+            parent=base["BodyText"],
+            fontSize=10.5,
+            leading=14,
+            leftIndent=14,
+            firstLineIndent=-10,
+            spaceAfter=3,
+        ),
+    }
+
+
+def _build_summary_flowables(
+    *,
+    sub: Submission,
+    ret: IftaReturn,
+    note: Any | None,
+    findings: list[Finding] | None,
+    truck_count: int,
+    attached_files: list[str] | None,
+) -> list[Any]:
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _pdf_styles()
+    carrier = sub.company or "your company"
+    status_text = _FILING_STATUS_HEADER.get(
+        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+    )
+
+    flow: list[Any] = [
+        Paragraph(f"IFTA {sub.quarter} Summary Report — {_pdf_escape(carrier)}", s["title"]),
+        Paragraph(f"Prepared for {_pdf_escape(sub.email)}", s["byline"]),
+        Paragraph(_pdf_escape(status_text), s["status"]),
+        Paragraph("Key numbers", s["h2"]),
+        Paragraph(
+            f"<b>Total tax due:</b> ${ret.total_tax_due:,.2f}<br/>"
+            f"<b>Fleet MPG:</b> {ret.fleet_mpg:.2f} "
+            f"<font color='#5b6b7c'>(realistic range for heavy trucks is roughly 5–8)</font><br/>"
+            f"<b>Fleet miles:</b> {ret.fleet_miles:,.0f}<br/>"
+            f"<b>Fleet gallons:</b> {ret.fleet_gallons:,.2f}"
+            + (f"<br/><b>Trucks on this return:</b> {truck_count}" if truck_count else ""),
+            s["body"],
+        ),
+    ]
+
+    if ret.rate_warning:
+        flow.append(Paragraph("⚠️ Rate notice", s["h2"]))
+        flow.append(Paragraph(_pdf_escape(ret.rate_warning), s["body"]))
+
+    problems = _structured_problems(note=note, findings=findings)
+    if problems:
+        flow.append(Paragraph("Things to double-check before filing", s["h2"]))
+        for p in problems:
+            flow.append(Paragraph(_pdf_escape(p["headline"]), s["h3"]))
+            if p["detail"]:
+                flow.append(Paragraph(_pdf_escape(p["detail"]), s["body"]))
+            if p["why"]:
+                flow.append(Paragraph(f"<b>Why it matters:</b> {_pdf_escape(p['why'])}", s["body"]))
+            if p["what_to_do"]:
+                flow.append(Paragraph(f"<b>What to do:</b> {_pdf_escape(p['what_to_do'])}", s["body"]))
+
+    tips = _structured_tips(note=note)
+    if tips:
+        flow.append(Paragraph("Filing tips", s["h2"]))
+        for t in tips:
+            flow.append(Paragraph(f"• {_pdf_escape(t)}", s["bullet"]))
+
+    if attached_files:
+        flow.append(Paragraph("Files in this packet", s["h2"]))
+        for name in attached_files:
+            flow.append(Paragraph(f"• {_pdf_escape(name)}", s["bullet"]))
+
+    flow.append(Spacer(1, 12))
+    flow.append(
+        Paragraph(
+            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            s["small"],
+        )
+    )
+    return flow
+
+
+def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _pdf_styles()
+    carrier = sub.company or "your company"
+    errors, warnings = _humanize_error_sections(error)
+
+    flow: list[Any] = [
+        Paragraph(
+            f"IFTA {sub.quarter} — Couldn't Finish Yet ({_pdf_escape(carrier)})", s["title"]
+        ),
+        Paragraph(f"Prepared for {_pdf_escape(sub.email)}", s["byline"]),
+        Paragraph(
+            "We received your files for "
+            f"{_pdf_escape(sub.quarter)}, but we hit a couple of issues "
+            "that need your input before we can compute your filing. "
+            "Nothing is lost — your files are saved with us, and we'll "
+            "pick up the moment you reply with the missing pieces.",
+            s["body"],
+        ),
+        Paragraph("What we noticed", s["h2"]),
+    ]
+    if errors:
+        for headline, detail in errors:
+            flow.append(Paragraph(_pdf_escape(headline), s["h3"]))
+            if detail:
+                flow.append(Paragraph(_pdf_escape(detail), s["body"]))
+    else:
+        flow.append(
+            Paragraph(
+                "Something on our end didn't quite work with the files you sent. "
+                "Reply to your packet email and Eugene will dig in.",
+                s["body"],
+            )
+        )
+
+    if warnings:
+        flow.append(Paragraph("Also worth a look", s["h2"]))
+        for headline, detail in warnings:
+            text = headline if not detail else f"{headline} {detail}"
+            flow.append(Paragraph(f"• {_pdf_escape(text)}", s["bullet"]))
+
+    flow.append(Paragraph("What to do next", s["h2"]))
+    flow.append(Paragraph("• Reply to your packet email with the missing or corrected files.", s["bullet"]))
+    flow.append(
+        Paragraph(
+            "• Or re-upload everything at "
+            "<link href='https://artjeck.com/ifta/submit' color='#0066cc'>"
+            "https://artjeck.com/ifta/submit</link>",
+            s["bullet"],
+        )
+    )
+    flow.append(Spacer(1, 12))
+    flow.append(
+        Paragraph(
+            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            s["small"],
+        )
+    )
+    return flow
+
+
+def _pdf_escape(text: str) -> str:
+    """Escape text for reportlab's mini-HTML Paragraph dialect.
+
+    Paragraph treats `<`, `>`, `&` as markup. We don't want stray characters
+    in customer-supplied names (e.g. ampersands in carrier names) to crash the
+    PDF build, and we never inject untrusted markup ourselves — only the
+    explicit tags we build into the template (b, br, font, link).
+    """
+    return (
+        str(text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
