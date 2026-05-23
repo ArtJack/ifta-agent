@@ -37,6 +37,7 @@ from ifta.validator import Finding
 from ifta.web.models import Submission
 
 CUSTOMER_NOTE_FILENAME = "customer_note.md"
+CUSTOMER_SUMMARY_FILENAME = "summary_report.md"
 
 _FILING_STATUS_LINE = {
     "READY_TO_FILE": "Looks ready to file.",
@@ -94,6 +95,7 @@ def render_customer_view(
 
     lines.append("Attached:")
     lines.append("• ifta_portal.csv — upload this directly to your state's IFTA portal")
+    lines.append("• summary_report.md — full plain-English breakdown for your records")
     if truck_count:
         if truck_count == 1:
             lines.append("• trucks/<id>.xlsx — per-truck breakdown")
@@ -197,3 +199,222 @@ def _humanize(text: str) -> str:
     # Collapse internal whitespace + tidy.
     out = re.sub(r"\s+", " ", out).strip().rstrip(".")
     return out + "." if out and not out.endswith((".", "!", "?")) else out
+
+
+# ─── customer summary report ─────────────────────────────────────────────────
+
+
+_FILING_STATUS_HEADER = {
+    "READY_TO_FILE": "Status: Ready to file",
+    "READY_WITH_WARNINGS": "Status: Ready to file — please double-check the items below",
+    "DO_NOT_FILE": "Status: Do NOT file yet — please resolve the items below first",
+}
+
+
+def render_customer_summary(
+    *,
+    sub: Submission,
+    ret: IftaReturn,
+    note: Any | None = None,
+    findings: list[Finding] | None = None,
+    truck_count: int = 0,
+    attached_files: list[str] | None = None,
+) -> str:
+    """Detailed customer-readable summary report.
+
+    Long-form companion to `render_customer_view` (which is the short email
+    body). Surfaces the full picture — every problem with its claim, the
+    'why it matters', and the 'what to do' — but in plain English. No
+    SHOUTY_CODES, no JSON evidence, no "[warning]" prefixes.
+
+    Designed to be attached to the customer's packet email so they (or
+    their accountant) can keep it for their records and forward it.
+    """
+    carrier = sub.company or "your company"
+    header = f"# IFTA {sub.quarter} Summary Report — {carrier}"
+    status_header = _FILING_STATUS_HEADER.get(
+        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+    )
+
+    lines: list[str] = [
+        header,
+        "",
+        f"_Prepared for {sub.email}._",
+        "",
+        f"## {status_header}",
+        "",
+    ]
+
+    # ── Key numbers ────────────────────────────────────────────────────────
+    lines.append("## Key numbers")
+    lines.append("")
+    lines.append(f"- **Total tax due:** ${ret.total_tax_due:,.2f}")
+    lines.append(f"- **Fleet MPG:** {ret.fleet_mpg:.2f}  _(realistic range for heavy trucks is roughly 5–8)_")
+    lines.append(f"- **Fleet miles:** {ret.fleet_miles:,.0f}")
+    lines.append(f"- **Fleet gallons:** {ret.fleet_gallons:,.2f}")
+    if truck_count:
+        lines.append(f"- **Trucks on this return:** {truck_count}")
+    lines.append("")
+
+    # ── Rate warning (loud) ────────────────────────────────────────────────
+    if ret.rate_warning:
+        lines.append("## ⚠️ Rate notice")
+        lines.append("")
+        lines.append(ret.rate_warning)
+        lines.append("")
+
+    # ── Problems / things to check ─────────────────────────────────────────
+    problems = _structured_problems(note=note, findings=findings)
+    if problems:
+        lines.append("## Things to double-check before filing")
+        lines.append("")
+        for p in problems:
+            lines.append(f"### {p['headline']}")
+            lines.append("")
+            if p["detail"]:
+                lines.append(p["detail"])
+                lines.append("")
+            if p["why"]:
+                lines.append(f"**Why it matters:** {p['why']}")
+            if p["what_to_do"]:
+                lines.append(f"**What to do:** {p['what_to_do']}")
+            lines.append("")
+
+    # ── Filing tips (info-level reminders) ─────────────────────────────────
+    tips = _structured_tips(note=note)
+    if tips:
+        lines.append("## Filing tips")
+        lines.append("")
+        for t in tips:
+            lines.append(f"- {t}")
+        lines.append("")
+
+    # ── Attachments ────────────────────────────────────────────────────────
+    if attached_files:
+        lines.append("## Files in this packet")
+        lines.append("")
+        for name in attached_files:
+            lines.append(f"- `{name}`")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append("Questions? Reply to the email this report came with — Eugene reads every one.")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _structured_problems(
+    *, note: Any | None, findings: list[Finding] | None
+) -> list[dict[str, str]]:
+    """Return one dict per warning/error, with headline + detail + why + what-to-do.
+
+    Built once and shared between summary rendering and (later) any other
+    detailed customer surface. Dev markup is stripped at this layer so callers
+    never have to think about it.
+    """
+    out: list[dict[str, str]] = []
+    seen_headlines: set[str] = set()
+
+    if note is not None:
+        # Build a map from issue-claim → its next_steps recommended_action so the
+        # summary pairs the two without showing them as two separate problems.
+        actions_by_claim_key: dict[str, str] = {}
+        for step in (getattr(note, "next_steps", None) or []):
+            if not _is_actionable(step):
+                continue
+            paired_claim = _humanize(_get(step, "claim"))
+            action = _humanize(_get(step, "recommended_action"))
+            if paired_claim and action:
+                actions_by_claim_key[_norm(paired_claim)] = action
+
+        for issue in (getattr(note, "issues", None) or []):
+            if not _is_actionable(issue):
+                continue
+            claim = _humanize(_get(issue, "claim"))
+            if not claim:
+                continue
+            headline, detail = _split_first_sentence(claim)
+            if _norm(headline) in seen_headlines:
+                continue
+            seen_headlines.add(_norm(headline))
+            why = _humanize(_get(issue, "filing_impact"))
+            what_to_do = (
+                actions_by_claim_key.get(_norm(claim))
+                or _humanize(_get(issue, "recommended_action"))
+            )
+            out.append(
+                {
+                    "headline": headline,
+                    "detail": detail,
+                    "why": why,
+                    "what_to_do": what_to_do,
+                }
+            )
+            # Reserve the action text itself so the standalone next_steps
+            # pass doesn't re-emit "Reply with your IFTA base state..." as
+            # its own empty problem entry.
+            if what_to_do:
+                seen_headlines.add(_norm(_split_first_sentence(what_to_do)[0]))
+
+        # Next steps that don't pair with an existing issue → standalone items.
+        for step in (getattr(note, "next_steps", None) or []):
+            if not _is_actionable(step):
+                continue
+            action = _humanize(_get(step, "recommended_action")) or _humanize(_get(step, "claim"))
+            if not action:
+                continue
+            headline, detail = _split_first_sentence(action)
+            if _norm(headline) in seen_headlines:
+                continue
+            seen_headlines.add(_norm(headline))
+            out.append(
+                {
+                    "headline": headline,
+                    "detail": detail,
+                    "why": _humanize(_get(step, "filing_impact")),
+                    "what_to_do": "",
+                }
+            )
+    elif findings:
+        for f in findings:
+            if f.severity not in ("warning", "error"):
+                continue
+            headline, detail = _split_first_sentence(f.message)
+            if _norm(headline) in seen_headlines:
+                continue
+            seen_headlines.add(_norm(headline))
+            out.append({"headline": headline, "detail": detail, "why": "", "what_to_do": ""})
+    return out
+
+
+def _structured_tips(*, note: Any | None) -> list[str]:
+    """Info-level filing_reminders rendered as plain bullets, dev markup stripped."""
+    if note is None:
+        return []
+    tips: list[str] = []
+    seen: set[str] = set()
+    for item in (getattr(note, "filing_reminders", None) or []):
+        if not isinstance(item, dict):
+            continue
+        text = _humanize(_get(item, "claim") or _get(item, "recommended_action"))
+        if not text:
+            continue
+        key = _norm(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        tips.append(text)
+    return tips
+
+
+def _split_first_sentence(text: str) -> tuple[str, str]:
+    """Split on the first sentence-ending punctuation. Headline + remainder."""
+    m = re.search(r"(?<=[.!?])\s+", text)
+    if not m:
+        return text.strip(), ""
+    return text[: m.start()].strip(), text[m.end() :].strip()
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text.lower()).strip()
