@@ -63,6 +63,11 @@ class PreflightReport:
     drivers: dict[str, str] = field(default_factory=dict)
     cards: dict[str, str] = field(default_factory=dict)
 
+    # Files we detected as duplicate sources (same parsed total as another
+    # file) and chose to skip during the real ingest. Step 8 — the worker
+    # auto-deduplicates instead of hard-rejecting the submission.
+    skipped_files: list[str] = field(default_factory=list)
+
     @property
     def has_errors(self) -> bool:
         return any(f.severity == "error" for f in self.findings)
@@ -275,11 +280,14 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
     report.drivers = dict(data.truck_drivers)
     report.cards = dict(data.truck_cards)
 
-    # ---- 5. Need BOTH miles and fuel data ----
+    # ---- 5. Missing-mileage / missing-fuel — Step 8: warnings, not blockers.
+    # These are data-quality signals the agent + the customer-summary report
+    # are built to explain ("you sent fuel but no miles — please attach the
+    # mileage report"). Hard-rejecting denies the customer that explanation.
     if not data.miles:
         report.findings.append(
             PreflightFinding(
-                "error",
+                "warning",
                 "NO_MILES",
                 "No mileage rows parsed. Verify the miles file has truck/state/miles columns.",
             )
@@ -287,7 +295,7 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
     if not data.fuel:
         report.findings.append(
             PreflightFinding(
-                "error",
+                "warning",
                 "NO_FUEL",
                 "No fuel rows parsed. Verify the fuel file has truck/state/gallons columns.",
             )
@@ -357,7 +365,11 @@ def preflight_inputs(inbox: Path) -> PreflightReport:
 def _add_duplicate_total_findings(
     report: PreflightReport, *, kind: Literal["mileage", "fuel"]
 ) -> None:
-    """Block likely summary/detail duplicates with identical parsed totals."""
+    """Detect summary/detail duplicates with identical parsed totals and pick
+    one to skip at ingest. This used to hard-reject the whole submission with
+    a dev-style email; Step 8 instead deduplicates and keeps moving so the
+    agent + customer-summary report can do their jobs. Severity is a warning
+    (we've handled it) rather than an error (we've blocked you)."""
     seen: dict[float, str] = {}
     for preview in report.files:
         if kind == "mileage":
@@ -378,15 +390,50 @@ def _add_duplicate_total_findings(
         if existing is None:
             seen[total] = preview.name
             continue
+        skip, keep = _pick_duplicate_to_skip(
+            kind=kind, a_name=existing, b_name=preview.name, files=report.files
+        )
+        if skip not in report.skipped_files:
+            report.skipped_files.append(skip)
+        # Prefer the kept file for further dup comparisons against this total.
+        seen[total] = keep
         report.findings.append(
             PreflightFinding(
-                "error",
+                "warning",
                 code,
                 f"{existing} and {preview.name} both parsed {total:,.2f} {unit}. "
-                "This looks like a duplicate summary/detail export. Remove one "
-                "source or re-run with --force only after manual confirmation.",
+                f"This looks like a duplicate summary/detail export — we'll use "
+                f"{keep} (more detail) and skip {skip} for this submission.",
             )
         )
+
+
+def _pick_duplicate_to_skip(
+    *,
+    kind: Literal["mileage", "fuel"],
+    a_name: str,
+    b_name: str,
+    files: list[FilePreview],
+) -> tuple[str, str]:
+    """Choose which duplicate file to skip. Returns (skip_name, keep_name).
+
+    Prefer keeping whichever file has MORE rows of the relevant kind (the
+    detail export beats the summary export). Ties go to the alphabetically
+    earlier name so the decision is deterministic across runs."""
+
+    def rows_for(name: str) -> int:
+        for p in files:
+            if p.name == name:
+                return p.parsed_mile_rows if kind == "mileage" else p.parsed_fuel_rows
+        return 0
+
+    a_rows, b_rows = rows_for(a_name), rows_for(b_name)
+    if a_rows > b_rows:
+        return b_name, a_name
+    if b_rows > a_rows:
+        return a_name, b_name
+    # Tie: deterministic alphabetical order.
+    return (b_name, a_name) if a_name < b_name else (a_name, b_name)
 
 
 def _add_raw_mpg_finding(report: PreflightReport) -> None:
