@@ -93,7 +93,15 @@ def test_preflight_flags_duplicate_fuel_sources(tmp_path: Path) -> None:
 
     assert "MULTIPLE_FUEL_SOURCES" in _codes(report)
     assert "DUPLICATE_FUEL_SOURCE" in _codes(report)
-    assert report.has_errors
+    # Step 8: duplicates are auto-handled (one source kept, the other added
+    # to skipped_files), so they ride as a warning rather than blocking the
+    # whole submission. The worker dedupes at ingest using skipped_files.
+    assert not report.has_errors
+    assert "fuel_summary.xlsx" in report.skipped_files
+    # The kept file should be the higher-detail one (more rows). When both
+    # files have the same row count, alphabetical order breaks the tie —
+    # which still leaves `fuel_summary.xlsx` skipped vs `fuel_detail.xlsx`.
+    assert "fuel_detail.xlsx" not in report.skipped_files
 
 
 def test_preflight_flags_supported_but_unparsed_reference_file(tmp_path: Path) -> None:
@@ -139,3 +147,55 @@ def test_preflight_flags_extreme_raw_mpg_as_warning_not_blocker(tmp_path: Path) 
         f.severity == "warning" and f.code == "RAW_MPG_HIGH" for f in report.findings
     )
     assert report.raw_mpg == 17.5
+
+
+# ─── Step 8: auto-dedup behavior ─────────────────────────────────────────────
+
+
+def test_preflight_picks_higher_detail_file_to_keep(tmp_path: Path) -> None:
+    """When two files have the same parsed total, keep the one with MORE rows
+    (the detail export) and skip the smaller (summary). Same reality as the
+    May-23 Rotex submission: a 28-row .xlsx transactions detail + a 13-row
+    summary PDF — the detail wins, the summary gets skipped."""
+    _write_fuel_xlsx(
+        tmp_path / "detail.xlsx",
+        # 3 rows summing to 280 gal.
+        [
+            {"truck": "T1", "state": "CA", "gallons": 100},
+            {"truck": "T1", "state": "NV", "gallons": 80},
+            {"truck": "T2", "state": "CA", "gallons": 100},
+        ],
+    )
+    _write_fuel_xlsx(
+        tmp_path / "summary.xlsx",
+        # 1 row summing to 280 gal — the rollup the customer also uploaded.
+        [{"truck": "T1", "state": "CA", "gallons": 280}],
+    )
+
+    report = preflight_inputs(tmp_path)
+
+    assert "DUPLICATE_FUEL_SOURCE" in _codes(report)
+    # Detail (3 rows) wins; summary (1 row) is dropped.
+    assert report.skipped_files == ["summary.xlsx"]
+
+
+def test_ingest_skips_files_marked_by_preflight(tmp_path: Path) -> None:
+    """The worker's process_submission passes preflight.skipped_files into
+    ingest_folder; the dedup decision becomes a real exclusion at parse
+    time, so the customer's filing isn't double-counted."""
+    from ifta.ingest import ingest_folder
+
+    _write_fuel_xlsx(
+        tmp_path / "primary.xlsx",
+        [{"truck": "T1", "state": "CA", "gallons": 100}],
+    )
+    _write_fuel_xlsx(
+        tmp_path / "dup.xlsx",
+        [{"truck": "T1", "state": "CA", "gallons": 100}],
+    )
+
+    full = ingest_folder(tmp_path)
+    skipped = ingest_folder(tmp_path, skip_files={"dup.xlsx"})
+
+    assert sum(r.gallons for r in full.fuel) == 200.0  # double-counted
+    assert sum(r.gallons for r in skipped.fuel) == 100.0  # correct after skip
