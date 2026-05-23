@@ -15,7 +15,9 @@ from types import SimpleNamespace
 from ifta.web.customer_view import (
     render_customer_failure,
     render_customer_failure_report,
+    render_customer_failure_report_pdf,
     render_customer_summary,
+    render_customer_summary_pdf,
     render_customer_view,
 )
 from ifta.web.models import Submission, SubmissionStatus
@@ -428,7 +430,9 @@ def test_failure_body_friendly_with_no_dev_markup() -> None:
     assert "What to do next:" in body
     assert "Reply to this email" in body
     assert "https://artjeck.com/ifta/submit" in body
-    assert "summary_report.md" in body
+    # Attachment is now a PDF (Step 9) — printable, signable, archive-able.
+    assert "summary_report.pdf" in body
+    assert "summary_report.md" not in body
     for forbidden in (
         "[DUPLICATE_FUEL_SOURCE]",
         "[SUPPORTED_FILE_UNPARSED]",
@@ -474,3 +478,64 @@ def test_failure_report_attachment_has_headlined_sections() -> None:
         "file_Summary_by_State",
     ):
         assert forbidden not in report
+
+
+# ─── PDF renderers ───────────────────────────────────────────────────────────
+
+
+def test_summary_pdf_is_real_pdf_with_content() -> None:
+    """Smoke-check that the PDF really is a PDF (right magic header), has
+    non-trivial body, and carries the customer-facing content the markdown
+    version would. Reportlab compresses streams so we can't grep precisely,
+    but the file size and magic header verify a real document was produced."""
+    note = SimpleNamespace(
+        filing_status="READY_WITH_WARNINGS",
+        issues=[
+            {
+                "severity": "warning",
+                "code": "MILES_SUSPICIOUSLY_FEW",
+                "claim": "Only 1 mileage row was parsed.",
+                "filing_impact": "Understates taxable gallons.",
+                "recommended_action": "Re-upload the full quarter.",
+            }
+        ],
+        filing_reminders=[],
+        next_steps=[],
+    )
+    pdf_bytes = render_customer_summary_pdf(
+        sub=_sub(),
+        ret=_ret(),
+        note=note,
+        truck_count=1,
+        attached_files=["ifta_portal.csv", "summary_report.pdf", "trucks/T1.xlsx"],
+    )
+    assert pdf_bytes[:4] == b"%PDF", "render_customer_summary_pdf must return a real PDF"
+    # Reasonable file size — not a hollow PDF with just a header.
+    assert len(pdf_bytes) > 1000
+
+
+def test_failure_pdf_is_real_pdf() -> None:
+    pdf_bytes = render_customer_failure_report_pdf(
+        sub=_sub(),
+        error=_REAL_PREFLIGHT_ERROR,
+    )
+    assert pdf_bytes[:4] == b"%PDF"
+    assert len(pdf_bytes) > 1000
+
+
+def test_summary_pdf_safe_against_html_chars_in_carrier_name() -> None:
+    """Carrier names containing '<', '>', '&' must not crash the PDF build
+    (reportlab Paragraph treats those as markup)."""
+    sub = Submission(
+        id="x", email="a@b.co", quarter="Q1-2026",
+        status=SubmissionStatus.DONE, confirm_token="t",
+        created_at=datetime.now(UTC),
+        company="Smith & <Co>",  # nasty
+        name="Smith & <Pat>",
+    )
+    pdf_bytes = render_customer_summary_pdf(
+        sub=sub,
+        ret=_ret(),
+        note=SimpleNamespace(filing_status="READY_TO_FILE", issues=[], filing_reminders=[], next_steps=[]),
+    )
+    assert pdf_bytes[:4] == b"%PDF"

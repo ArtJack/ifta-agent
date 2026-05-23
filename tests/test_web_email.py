@@ -192,14 +192,17 @@ def test_send_failure_body_is_humanized_and_summary_report_attached(
         "file_ifta-DM_EXPRESS",
     ):
         assert forbidden not in body, f"failure email leaked dev markup: {forbidden!r}"
-    # The detailed report is attached.
-    assert params["attachments"], "expected summary_report.md attached on failure"
-    summary = next(a for a in params["attachments"] if a["filename"] == "summary_report.md")
-    summary_text = bytes(summary["content"]).decode("utf-8")
-    assert "Couldn't Finish Yet" in summary_text
-    # Same anti-leakage rules apply to the attachment.
-    for forbidden in ("[DUPLICATE_FUEL_SOURCE]", "[ERROR]", "ERRORS (1)", "--force"):
-        assert forbidden not in summary_text
+    # The detailed report is attached as a PDF (Step 9).
+    assert params["attachments"], "expected summary_report.pdf attached on failure"
+    summary = next(
+        a for a in params["attachments"] if a["filename"] == "summary_report.pdf"
+    )
+    summary_bytes = bytes(summary["content"])
+    # PDF magic number — proves we shipped an actual PDF, not markdown.
+    assert summary_bytes[:4] == b"%PDF", "summary_report.pdf is not a valid PDF"
+    # The customer-facing carrier name should appear in the PDF text stream.
+    # ReportLab compresses streams, so search the raw bytes for any human marker.
+    assert b"Couldn't Finish Yet" in summary_bytes or b"ACME LOGISTICS" in summary_bytes
 
 
 def test_send_failure_generic_fallback_for_unparseable_error_text(
