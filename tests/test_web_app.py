@@ -663,22 +663,24 @@ def test_submit_add_appends_files_and_reopens_for_review(
     assert any(n.startswith("file_") and n.endswith("fuel.csv") for n in names)
 
 
-def test_submit_add_requires_backend_key(
+def test_submit_add_accepts_token_only_no_backend_key_required(
     tmp_path: Path,
     submissions_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The magic-link endpoint is a server-to-server channel. Browsers
-    posting straight to it without the shared key are rejected."""
+    """The token in the URL IS the auth — a 32-byte URL-safe secret known
+    only to the customer who got the magic-link email. Direct browser POSTs
+    from /ifta/add/<token> on artjeck.com work without an X-Backend-Key
+    header; CORS still gates the origin."""
     test_client = _backend_key_client(tmp_path, submissions_root, monkeypatch)
     token = _create_pending_approval_sub(test_client, submissions_root, backend_key="test-shared-secret")
 
     r = test_client.post(
         f"/submit/add/{token}",
-        # No X-Backend-Key header.
+        # No X-Backend-Key header — token-only auth.
         files={"files": ("more.csv", b"truck,state,miles\nT1,NV,500\n", "text/csv")},
     )
-    assert r.status_code == 401
+    assert r.status_code == 202, r.text
 
 
 def test_submit_add_unknown_token_404(

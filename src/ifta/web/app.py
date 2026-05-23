@@ -333,23 +333,17 @@ def create_app() -> FastAPI:
     ) -> dict[str, str]:
         """Step 8 slice 4 — supplement an existing submission via a magic link.
 
-        Called by the artjeck.com `/ifta/add/[token]` page's server-side
-        proxy. Looks the submission up by its confirm_token, appends the
-        new files to its existing inbox, regenerates the intake brief, and
-        sends a fresh Telegram approval card so the operator sees the
-        updated picture and re-decides.
+        The token in the URL is a 32-byte URL-safe secret the customer
+        received in their "Request more files" email. That token IS the
+        auth — anyone with the URL is, by definition, the customer who got
+        the email — so this endpoint deliberately skips the CAPTCHA /
+        backend-key checks /submit requires. CORS still gates browser
+        origins.
 
         Only PENDING_APPROVAL or NEEDS_MORE_FILES rows can be supplemented;
         anything else (queued, running, done, rejected, failed) returns 409
         so the customer knows the window has closed.
         """
-        # Same X-Backend-Key auth pattern as /submit — the artjeck.com proxy
-        # is the only intended caller; direct browser uploads would fail
-        # CORS + this auth.
-        request_key = request.headers.get("x-backend-key")
-        if not backend_key or request_key != backend_key:
-            raise HTTPException(status_code=401, detail="backend key required")
-
         if not files:
             raise HTTPException(status_code=400, detail="at least one file is required")
         for upload in files:
