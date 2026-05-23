@@ -26,7 +26,9 @@ from ifta.validator import Finding, format_findings, validate
 from ifta.web.customer_view import (
     CUSTOMER_NOTE_FILENAME,
     CUSTOMER_SUMMARY_FILENAME,
+    CUSTOMER_SUMMARY_PDF_FILENAME,
     render_customer_summary,
+    render_customer_summary_pdf,
     render_customer_view,
 )
 from ifta.web.models import Submission
@@ -112,7 +114,13 @@ def process_submission(
         encoding="utf-8",
     )
     truck_xlsxs = sorted(p.name for p in (out_dir / "trucks").glob("*.xlsx")) if (out_dir / "trucks").exists() else []
-    attached_files = ["ifta_portal.csv", *(f"trucks/{n}" for n in truck_xlsxs), CUSTOMER_SUMMARY_FILENAME]
+    # The PDF is what the customer actually receives. We still write the .md
+    # alongside as a debug/operator artifact (cheaper to diff than a PDF).
+    attached_files = [
+        "ifta_portal.csv",
+        *(f"trucks/{n}" for n in truck_xlsxs),
+        CUSTOMER_SUMMARY_PDF_FILENAME,
+    ]
     (out_dir / CUSTOMER_SUMMARY_FILENAME).write_text(
         render_customer_summary(
             sub=sub,
@@ -123,6 +131,16 @@ def process_submission(
             attached_files=attached_files,
         ),
         encoding="utf-8",
+    )
+    (out_dir / CUSTOMER_SUMMARY_PDF_FILENAME).write_bytes(
+        render_customer_summary_pdf(
+            sub=sub,
+            ret=ret,
+            note=note,
+            findings=findings,
+            truck_count=truck_count,
+            attached_files=attached_files,
+        )
     )
     return out_dir
 
