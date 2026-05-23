@@ -256,3 +256,42 @@ def test_send_more_files_request_subject_body_and_pdf_attachment(
         a for a in params["attachments"] if a["filename"] == "summary_report.pdf"
     )
     assert bytes(pdf_att["content"])[:4] == b"%PDF"
+
+
+def test_send_more_files_request_includes_magic_link_when_site_url_set(
+    captured_sends: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Step 8 slice 4 — when IFTA_PUBLIC_SITE_URL is set, the email surfaces
+    the one-click /ifta/add/<token> magic link as the primary path so the
+    customer can supplement without re-typing the form."""
+    monkeypatch.setenv("IFTA_PUBLIC_SITE_URL", "https://artjeck.com")
+    sub = _sub()
+    sub.confirm_token = "tok-1234567890abc"
+    sub.status = SubmissionStatus.NEEDS_MORE_FILES
+    client = EmailClient(_enabled_email_config())
+    assert client.send_more_files_request(sub, _REAL_INTAKE_BRIEF) is True
+
+    body = captured_sends[0]["text"]
+    assert "https://artjeck.com/ifta/add/tok-1234567890abc" in body
+    assert "One-click upload" in body
+
+
+def test_more_files_email_without_site_url_falls_back_to_generic_copy(
+    captured_sends: list[dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No env var (or empty) → no half-formed link or 'None' leaks; the body
+    uses the original reply/re-upload copy instead."""
+    monkeypatch.delenv("IFTA_PUBLIC_SITE_URL", raising=False)
+    sub = _sub()
+    sub.confirm_token = "tok-abc"
+    sub.status = SubmissionStatus.NEEDS_MORE_FILES
+    client = EmailClient(_enabled_email_config())
+    assert client.send_more_files_request(sub, _REAL_INTAKE_BRIEF) is True
+
+    body = captured_sends[0]["text"]
+    assert "/ifta/add/" not in body
+    assert "None" not in body
+    # Falls back to the original generic instructions.
+    assert "re-upload everything at https://artjeck.com/ifta/submit" in body
