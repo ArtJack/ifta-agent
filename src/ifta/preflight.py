@@ -396,11 +396,17 @@ def _add_raw_mpg_finding(report: PreflightReport) -> None:
     if report.raw_mpg == 0:
         return
 
+    # RAW_MPG_HIGH/LOW are *data-quality* signals, not parse failures: the
+    # files were read fine, the ratio just suggests missing fuel (high) or
+    # duplicate fuel / missing miles (low). The agent's domain knowledge
+    # (Step 1) interprets these correctly and asks the customer for the
+    # missing pieces, so they must NEVER hard-block the submission — that
+    # would deny the agent the chance to help. Keep them as warnings so the
+    # operator + agent can decide what to do with the data they have.
     if report.raw_mpg > mpg_hi:
-        severity: PreflightSeverity = "error" if report.raw_mpg > mpg_hi * 1.2 else "warning"
         report.findings.append(
             PreflightFinding(
-                severity,
+                "warning",
                 "RAW_MPG_HIGH",
                 f"Raw miles/gallons MPG is {report.raw_mpg:.2f} "
                 f"({report.total_miles:,.0f} miles / {report.total_gallons:,.2f} gal), "
@@ -409,10 +415,9 @@ def _add_raw_mpg_finding(report: PreflightReport) -> None:
             )
         )
     elif report.raw_mpg < mpg_lo:
-        severity = "error" if report.raw_mpg < mpg_lo * 0.75 else "warning"
         report.findings.append(
             PreflightFinding(
-                severity,
+                "warning",
                 "RAW_MPG_LOW",
                 f"Raw miles/gallons MPG is {report.raw_mpg:.2f} "
                 f"({report.total_miles:,.0f} miles / {report.total_gallons:,.2f} gal), "
