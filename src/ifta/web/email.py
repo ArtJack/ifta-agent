@@ -112,18 +112,18 @@ class EmailClient:
         if not self.config.enabled:
             log.info("email disabled — skipping failure email for %s", sub.id)
             return False
-        # Plain-English email body + a detailed customer-readable report file.
-        # Mirrors send_packet (Step 5–6) — the customer never sees raw codes,
+        # Plain-English email body + a detailed customer-readable report.
+        # Mirrors send_packet (Step 5-6) — the customer never sees raw codes,
         # JSON evidence, or "[ERROR]" prefixes, and they get a self-contained
-        # report they can keep or forward to their accountant.
+        # printable PDF they can keep or forward to their accountant.
         from ifta.web.customer_view import (
             render_customer_failure,
-            render_customer_failure_report,
+            render_customer_failure_report_pdf,
         )
 
         text = render_customer_failure(sub=sub, error=error)
-        report_md = render_customer_failure_report(sub=sub, error=error).encode("utf-8")
-        attachments = [{"filename": "summary_report.md", "content": list(report_md)}]
+        report_pdf = render_customer_failure_report_pdf(sub=sub, error=error)
+        attachments = [{"filename": "summary_report.pdf", "content": list(report_pdf)}]
         return self._send(
             to=sub.email,
             subject=f"Couldn't process your {sub.quarter} IFTA submission yet",
@@ -198,9 +198,15 @@ def _collect_packet_files(out_dir: Path) -> Iterable[Path]:
 
 
 # Files the *customer* actually needs in their inbox. We deliberately exclude
-# review_note.md and findings.json (dev/audit artifacts) and customer_note.md
-# (already inlined into the email body — no point re-attaching).
-_CUSTOMER_EXCLUDED_NAMES = {"review_note.md", "findings.json", "customer_note.md"}
+# review_note.md, findings.json (dev/audit artifacts), customer_note.md (already
+# inlined into the email body), and summary_report.md (the operator-debug
+# version of the customer report — the customer gets summary_report.pdf instead).
+_CUSTOMER_EXCLUDED_NAMES = {
+    "review_note.md",
+    "findings.json",
+    "customer_note.md",
+    "summary_report.md",
+}
 
 
 def _collect_customer_attachments(out_dir: Path) -> Iterable[Path]:
@@ -211,12 +217,15 @@ def _collect_customer_attachments(out_dir: Path) -> Iterable[Path]:
     portal = out_dir / "ifta_portal.csv"
     if portal.exists():
         files.append(portal)
-    # Detailed customer summary report (plain English; problems, why-it-matters,
-    # what-to-do) — gives the customer/accountant a self-contained record while
-    # keeping the email body itself minimal.
-    summary = out_dir / "summary_report.md"
-    if summary.exists():
-        files.append(summary)
+    # Customer-facing summary report — PDF (printable, signable, archive-able)
+    # rather than markdown. Falls back to .md if the PDF wasn't produced for
+    # some reason (e.g. an older submission's output dir from before Step 9).
+    summary_pdf = out_dir / "summary_report.pdf"
+    summary_md = out_dir / "summary_report.md"
+    if summary_pdf.exists():
+        files.append(summary_pdf)
+    elif summary_md.exists():
+        files.append(summary_md)
     # One Excel per truck (or any other intentionally-attached *.xlsx).
     for p in sorted(out_dir.rglob("*.xlsx")):
         if p.name not in _CUSTOMER_EXCLUDED_NAMES:
