@@ -152,12 +152,68 @@ def test_send_packet_handles_missing_out_dir(captured_sends: list[dict[str, Any]
     assert params.get("attachments") in (None, [])
 
 
-def test_send_failure(captured_sends: list[dict[str, Any]]) -> None:
+def test_send_failure_body_is_humanized_and_summary_report_attached(
+    captured_sends: list[dict[str, Any]],
+) -> None:
+    """Failure emails go to real customers — they must NOT contain raw codes,
+    `[ERROR]` prefixes, JSON, or developer jargon. The body explains what
+    happened in plain English and tells them how to send the missing piece;
+    the full picture rides along as `summary_report.md`, same as the success
+    path. Mirrors Step 5–6 for the failure case."""
+    error_dump = (
+        "Preflight found ERROR-level issues in your uploaded files:\n"
+        "ERRORS (1):\n"
+        "  [DUPLICATE_FUEL_SOURCE] file_Summary_by_State_-_DM_EXPRESS_INC.pdf and "
+        "file_ifta-DM_EXPRESS_INC.xlsx both parsed 8,753.74 gallons. This looks like "
+        "a duplicate summary/detail export. Remove one source or re-run with --force "
+        "only after manual confirmation.\n"
+        "\n"
+        "WARNINGS (1):\n"
+        "  [UNKNOWN_TRUCK] Some rows had no resolvable truck_id and were bucketed as 'unknown'."
+    )
     client = EmailClient(_enabled_config())
-    assert client.send_failure(_make_sub(), "ingest blew up on row 12") is True
+    assert client.send_failure(_make_sub(), error_dump) is True
+
     params = captured_sends[0]
     assert "Couldn't process" in params["subject"]
-    assert "ingest blew up on row 12" in params["text"]
+    body = params["text"]
+    # Friendly framing.
+    assert "What to do next" in body
+    assert "Reply to this email" in body
+    # Dev markup must NOT leak through.
+    for forbidden in (
+        "[DUPLICATE_FUEL_SOURCE]",
+        "[UNKNOWN_TRUCK]",
+        "[ERROR]",
+        "ERRORS (1)",
+        "WARNINGS (1)",
+        "--force",
+        "file_Summary_by_State",
+        "file_ifta-DM_EXPRESS",
+    ):
+        assert forbidden not in body, f"failure email leaked dev markup: {forbidden!r}"
+    # The detailed report is attached.
+    assert params["attachments"], "expected summary_report.md attached on failure"
+    summary = next(a for a in params["attachments"] if a["filename"] == "summary_report.md")
+    summary_text = bytes(summary["content"]).decode("utf-8")
+    assert "Couldn't Finish Yet" in summary_text
+    # Same anti-leakage rules apply to the attachment.
+    for forbidden in ("[DUPLICATE_FUEL_SOURCE]", "[ERROR]", "ERRORS (1)", "--force"):
+        assert forbidden not in summary_text
+
+
+def test_send_failure_generic_fallback_for_unparseable_error_text(
+    captured_sends: list[dict[str, Any]],
+) -> None:
+    """If the error string isn't the preflight format (e.g. an internal
+    exception), the renderer still produces a friendly body — no Python
+    tracebacks leaked to the customer."""
+    client = EmailClient(_enabled_config())
+    assert client.send_failure(_make_sub(), "Internal error: KeyError 'state'") is True
+    body = captured_sends[0]["text"]
+    assert "Reply to this email" in body
+    # No raw Python error format.
+    assert "KeyError" not in body or "Something on our end" in body
 
 
 def test_admin_bcc_included(captured_sends: list[dict[str, Any]]) -> None:
