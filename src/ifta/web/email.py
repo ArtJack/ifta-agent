@@ -112,11 +112,23 @@ class EmailClient:
         if not self.config.enabled:
             log.info("email disabled — skipping failure email for %s", sub.id)
             return False
-        text = _failure_text(sub, error)
+        # Plain-English email body + a detailed customer-readable report file.
+        # Mirrors send_packet (Step 5–6) — the customer never sees raw codes,
+        # JSON evidence, or "[ERROR]" prefixes, and they get a self-contained
+        # report they can keep or forward to their accountant.
+        from ifta.web.customer_view import (
+            render_customer_failure,
+            render_customer_failure_report,
+        )
+
+        text = render_customer_failure(sub=sub, error=error)
+        report_md = render_customer_failure_report(sub=sub, error=error).encode("utf-8")
+        attachments = [{"filename": "summary_report.md", "content": list(report_md)}]
         return self._send(
             to=sub.email,
-            subject=f"Couldn't process your {sub.quarter} IFTA submission",
+            subject=f"Couldn't process your {sub.quarter} IFTA submission yet",
             text=text,
+            attachments=attachments,
         )
 
     def send_acknowledgement(self, sub: Submission) -> bool:
@@ -265,17 +277,6 @@ def _packet_text(sub: Submission, customer_note: str) -> str:
         f"• ifta_portal.csv — upload this directly to your state's IFTA portal\n"
         f"• trucks/<id>.xlsx — per-truck breakdown\n\n"
         f"Questions? Just reply — Eugene reads every email.\n\n"
-        f"— ArtJeck IFTA\n"
-    )
-
-
-def _failure_text(sub: Submission, error: str) -> str:
-    return (
-        f"Hi,\n\n"
-        f"We hit an issue processing your {sub.quarter} files:\n\n"
-        f"{error.strip()}\n\n"
-        f"Reply to this email and Eugene will take a look — usually the fix is "
-        f"a quick re-upload with the right file format.\n\n"
         f"— ArtJeck IFTA\n"
     )
 
