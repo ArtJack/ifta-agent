@@ -23,6 +23,7 @@ from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
 from ifta.rates import fetch_rates
 from ifta.report import write_per_truck_filings, write_portal_csv
 from ifta.validator import Finding, format_findings, validate
+from ifta.web.customer_view import CUSTOMER_NOTE_FILENAME, render_customer_view
 from ifta.web.models import Submission
 
 log = logging.getLogger("ifta.web.pipeline")
@@ -84,7 +85,7 @@ def process_submission(
         data=data,
     )
 
-    _write_review_note(
+    note = _write_review_note(
         out_dir / "review_note.md",
         sub=sub,
         inbox=inbox,
@@ -93,6 +94,15 @@ def process_submission(
         ret=ret,
     )
     write_findings_json(out_dir / FINDINGS_FILENAME, report=report, findings=findings)
+    # Plain-English customer-facing body for the packet email. Kept separate
+    # from review_note.md (which stays the dev/audit view).
+    truck_count = len({m.truck_id for m in data.miles} | {f.truck_id for f in data.fuel})
+    (out_dir / CUSTOMER_NOTE_FILENAME).write_text(
+        render_customer_view(
+            sub=sub, ret=ret, note=note, findings=findings, truck_count=truck_count
+        ),
+        encoding="utf-8",
+    )
     return out_dir
 
 
@@ -157,12 +167,16 @@ def _write_review_note(
     out_dir: Path,
     findings: list,
     ret,
-) -> None:
-    """Try the AI agent first; fall back to a deterministic findings note."""
+):
+    """Try the AI agent first; fall back to a deterministic findings note.
+
+    Returns the agent's ReviewNote when the AI path succeeded, or None when
+    the deterministic fallback ran. The caller uses this to render the
+    customer-facing email body (plain English vs. structured note).
+    """
     if os.environ.get("ANTHROPIC_API_KEY") and not _agent_disabled():
         try:
-            _write_agent_review(path, sub=sub, inbox=inbox, out_dir=out_dir)
-            return
+            return _write_agent_review(path, sub=sub, inbox=inbox, out_dir=out_dir)
         except Exception as e:
             log.warning(
                 "agent review failed for submission %s — writing deterministic "
@@ -171,6 +185,7 @@ def _write_review_note(
                 e,
             )
     _write_findings_note(path, findings, ret)
+    return None
 
 
 def _agent_disabled() -> bool:
@@ -184,8 +199,12 @@ def _write_agent_review(
     sub: Submission,
     inbox: Path,
     out_dir: Path,
-) -> None:
-    """Run the agent against this submission's paths and write its narrative."""
+):
+    """Run the agent against this submission's paths and write its narrative.
+
+    Returns the ReviewNote so callers can render an alternate (e.g. customer-
+    facing) view from the same structured data without re-running the agent.
+    """
     # Imported lazily so unrelated tests don't pay the agent's import cost.
     from ifta.agent import review as agent_review
     from ifta.agent import write_review_md
@@ -209,6 +228,7 @@ def _write_agent_review(
         metrics.wall_time_seconds,
         metrics.estimated_cost_usd,
     )
+    return note
 
 
 def _write_findings_note(path: Path, findings: list, ret) -> None:
