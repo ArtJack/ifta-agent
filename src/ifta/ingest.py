@@ -379,13 +379,21 @@ def ingest_file(path: Path) -> CleanData:
     return out
 
 
-def ingest_folder(folder: Path) -> CleanData:
-    """Read every supported file in a folder and merge."""
+def ingest_folder(folder: Path, *, skip_files: set[str] | None = None) -> CleanData:
+    """Read every supported file in a folder and merge.
+
+    `skip_files`, when given, names files (by basename) to skip — used by
+    the web pipeline to honor preflight's auto-dedup decisions for files
+    that look like duplicate summary/detail exports of the same data.
+    """
+    skip = skip_files or set()
     merged = CleanData()
     for path in sorted(folder.iterdir()):
         if path.is_dir() or path.name.startswith("."):
             continue
         if path.suffix.lower() not in (".csv", ".xlsx", ".xlsm", ".xls", ".pdf"):
+            continue
+        if path.name in skip:
             continue
         try:
             data = ingest_file(path)
