@@ -358,6 +358,42 @@ def approve_submission(
     return _row_to_submission(row) if row else None
 
 
+def reopen_for_review(
+    path: Path,
+    submission_id: str,
+) -> Submission | None:
+    """Flip NEEDS_MORE_FILES (or PENDING_APPROVAL — no-op) back to PENDING_APPROVAL.
+
+    Called from the /submit/add/{token} endpoint after the customer uploads
+    more files: the submission is ready for a fresh operator decision based
+    on the updated inbox. Clears the prior decided_at/by/reason so the new
+    approval card represents the current state, not the previous ask.
+    """
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["status"] not in (
+            SubmissionStatus.NEEDS_MORE_FILES.value,
+            SubmissionStatus.PENDING_APPROVAL.value,
+        ):
+            # Row already moved on (queued, running, done, rejected, failed) —
+            # the customer's add-files window has closed. Return the current
+            # row so the caller can surface the right HTTP code.
+            return _row_to_submission(row)
+        conn.execute(
+            "UPDATE submissions SET status = ?, decided_at = NULL, decided_by = NULL,"
+            " decline_reason = NULL WHERE id = ?",
+            (SubmissionStatus.PENDING_APPROVAL.value, submission_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row else None
+
+
 def request_more_files_submission(
     path: Path,
     submission_id: str,
