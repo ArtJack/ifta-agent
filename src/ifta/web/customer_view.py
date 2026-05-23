@@ -873,6 +873,160 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
     return flow
 
 
+# ─── "Request more files" renderers ──────────────────────────────────────────
+#
+# Reused for the operator's "📩 Request more files" Telegram button (Step 8
+# slice 3). The framing is slightly softer than the rejection path — we're
+# not telling the customer "we couldn't process this", we're telling them
+# "we're ready to file, we just need a bit more first". Same anti-leakage
+# guarantees as the failure renderers; same helpers do the dev-markup
+# stripping and the structured parse.
+
+
+def render_more_files_request(*, sub: Submission, intake_brief: str) -> str:
+    """Short, friendly email body for the operator's 'more files' request."""
+    greeting = f"Hi {sub.name}," if sub.name else "Hi,"
+    bullets = _humanize_intake_brief_lines(intake_brief)
+    lines: list[str] = [greeting, ""]
+    lines.append(
+        f"We received your {sub.quarter} files — thanks. Before we can finish "
+        "your filing we'd like a bit more from you:"
+    )
+    lines.append("")
+    if bullets:
+        for b in bullets:
+            lines.append(f"• {b}")
+    else:
+        lines.append(
+            "• A couple of additional records would help us finish — Eugene will "
+            "follow up with specifics when you reply."
+        )
+    lines.append("")
+    lines.append("How to send what's missing:")
+    lines.append("• Reply to this email with the missing files attached — Eugene reads every one.")
+    lines.append("• Or re-upload everything at https://artjeck.com/ifta/submit")
+    lines.append("")
+    lines.append(
+        "Your files are safe on our end — no need to re-send the same ones "
+        "unless you want to. We'll pick up the moment we hear back."
+    )
+    lines.append("")
+    lines.append("Attached: summary_report.pdf — the full plain-English breakdown for your records.")
+    lines.append("")
+    lines.append("— ArtJeck IFTA")
+    return "\n".join(lines) + "\n"
+
+
+def render_more_files_request_pdf(*, sub: Submission, intake_brief: str) -> bytes:
+    """PDF companion to render_more_files_request — same content as the
+    detailed customer report, framed as 'a few more pieces needed'."""
+    flow = _build_more_files_flowables(sub=sub, intake_brief=intake_brief)
+    return _build_pdf(
+        title=f"IFTA {sub.quarter} — A few more files needed ({sub.company or 'your company'})",
+        flow=flow,
+    )
+
+
+def _build_more_files_flowables(*, sub: Submission, intake_brief: str) -> list[Any]:
+    from reportlab.platypus import Paragraph, Spacer
+
+    s = _pdf_styles()
+    carrier = sub.company or "your company"
+    findings = _humanize_intake_brief_sections(intake_brief)
+
+    flow: list[Any] = [
+        Paragraph(
+            f"IFTA {sub.quarter} — A few more files needed ({_pdf_escape(carrier)})",
+            s["title"],
+        ),
+        Paragraph(f"Prepared for {_pdf_escape(sub.email)}", s["byline"]),
+        Paragraph(
+            f"We received your files for {_pdf_escape(sub.quarter)} — thanks. "
+            "Before we can finish your filing we'd like a bit more from you. "
+            "Nothing is lost; your files are saved on our end and we'll pick "
+            "up the moment you reply.",
+            s["body"],
+        ),
+        Paragraph("What we'd like to clarify", s["h2"]),
+    ]
+    if findings:
+        for headline, detail in findings:
+            flow.append(Paragraph(_pdf_escape(headline), s["h3"]))
+            if detail:
+                flow.append(Paragraph(_pdf_escape(detail), s["body"]))
+    else:
+        flow.append(
+            Paragraph(
+                "Eugene will follow up by email with specifics — reply to your "
+                "packet email and we'll take it from there.",
+                s["body"],
+            )
+        )
+
+    flow.append(Paragraph("How to send what's missing", s["h2"]))
+    flow.append(Paragraph("• Reply to your packet email with the missing files attached.", s["bullet"]))
+    flow.append(
+        Paragraph(
+            "• Or re-upload everything at "
+            "<link href='https://artjeck.com/ifta/submit' color='#0066cc'>"
+            "https://artjeck.com/ifta/submit</link>",
+            s["bullet"],
+        )
+    )
+    flow.append(Spacer(1, 12))
+    flow.append(
+        Paragraph(
+            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            s["small"],
+        )
+    )
+    return flow
+
+
+# The intake brief uses the `- [SEVERITY] CODE: message` format produced by
+# ifta.web.intake_brief, distinct from preflight's `[CODE] message` dump that
+# the failure renderers parse. The bullets, the dev-markup stripping, and the
+# headline/detail split are the same — just a different leading shape.
+_INTAKE_BULLET = re.compile(
+    r"^\s*[-•]?\s*\[(?:ERROR|WARNING|INFO)\]\s+([A-Z][A-Z0-9_]*)\s*:\s*(.+)$",
+    re.IGNORECASE,
+)
+# Presence-only counterpart — used against the whole multi-line brief, where
+# the line-anchored _INTAKE_BULLET regex would fail without re.MULTILINE.
+_HAS_INTAKE_BULLET = re.compile(
+    r"\[(?:ERROR|WARNING|INFO)\]\s+[A-Z][A-Z0-9_]*\s*:", re.IGNORECASE
+)
+
+
+def _humanize_intake_brief_lines(brief: str) -> list[str]:
+    """Pull warning/error bullets out of the intake brief as plain English.
+
+    Returns [] if the input doesn't look like an intake brief so the caller
+    can fall back to a generic friendly message rather than leaking opaque
+    text to the customer.
+    """
+    if not _HAS_INTAKE_BULLET.search(brief):
+        return []
+    bullets: list[str] = []
+    for raw in brief.splitlines():
+        m = _INTAKE_BULLET.match(raw.strip())
+        if not m:
+            continue
+        text = _clean_finding_text(m.group(2))
+        if text:
+            bullets.append(text)
+    return bullets
+
+
+def _humanize_intake_brief_sections(brief: str) -> list[tuple[str, str]]:
+    """Same as _humanize_intake_brief_lines but split into (headline, detail)
+    pairs for the detailed PDF layout."""
+    out: list[tuple[str, str]] = []
+    for line in _humanize_intake_brief_lines(brief):
+        out.append(_split_first_sentence(line))
+    return out
+
+
 def _pdf_escape(text: str) -> str:
     """Escape text for reportlab's mini-HTML Paragraph dialect.
 
