@@ -98,6 +98,8 @@ class AdminNotifier:
                         r.text[:200],
                     )
                     ok = False
+                else:
+                    log.info("admin notify sent to %s", chat_id)
             except requests.RequestException as e:
                 log.warning("admin notify to %s raised: %s", chat_id, e)
                 ok = False
