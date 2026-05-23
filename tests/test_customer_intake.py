@@ -114,7 +114,14 @@ def test_preflight_flags_supported_but_unparsed_reference_file(tmp_path: Path) -
     assert "SUPPORTED_FILE_UNPARSED" in _codes(report)
 
 
-def test_preflight_blocks_extreme_raw_mpg_as_likely_missing_file(tmp_path: Path) -> None:
+def test_preflight_flags_extreme_raw_mpg_as_warning_not_blocker(tmp_path: Path) -> None:
+    """RAW_MPG_HIGH is a *data-quality* signal — files parsed fine, the ratio
+    just suggests missing fuel. The agent's domain knowledge interprets it
+    correctly and asks the customer for the missing receipts, so it must
+    surface as a warning that flows through the pipeline, never as a hard
+    block that drops the submission with a developer-style rejection email.
+    Earlier behavior of hard-failing this case is what caused the May-23
+    Rotex submission to bounce back instead of getting routed to the AI."""
     _write_miles_xlsx(
         tmp_path / "miles.xlsx",
         [{"truck": "T1", "state": "CA", "miles": 1400}],
@@ -127,5 +134,8 @@ def test_preflight_blocks_extreme_raw_mpg_as_likely_missing_file(tmp_path: Path)
     report = preflight_inputs(tmp_path)
 
     assert "RAW_MPG_HIGH" in _codes(report)
-    assert report.has_errors
+    assert not report.has_errors  # NEW: warning, not blocker
+    assert any(
+        f.severity == "warning" and f.code == "RAW_MPG_HIGH" for f in report.findings
+    )
     assert report.raw_mpg == 17.5
