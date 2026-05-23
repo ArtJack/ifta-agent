@@ -95,9 +95,11 @@ class EmailClient:
         if not self.config.enabled:
             log.info("email disabled — skipping packet for %s", sub.id)
             return False
-        files = sorted(_collect_packet_files(out_dir))
-        review_note = _read_review_note(out_dir)
-        text = _packet_text(sub, review_note)
+        # Customer-facing artifacts only — the dev/audit files (review_note.md,
+        # findings.json, customer_note.md itself) stay on the operator side.
+        files = sorted(_collect_customer_attachments(out_dir))
+        body = _read_customer_note(out_dir)
+        text = _packet_text(sub, body)
         attachments = [_to_attachment(p) for p in files]
         return self._send(
             to=sub.email,
@@ -183,12 +185,39 @@ def _collect_packet_files(out_dir: Path) -> Iterable[Path]:
     return files
 
 
+# Files the *customer* actually needs in their inbox. We deliberately exclude
+# review_note.md, findings.json, and customer_note.md (the latter is inlined
+# into the email body, the former two are dev/audit artifacts that confuse
+# truckers and accountants).
+_CUSTOMER_EXCLUDED_NAMES = {"review_note.md", "findings.json", "customer_note.md"}
+
+
+def _collect_customer_attachments(out_dir: Path) -> Iterable[Path]:
+    if not out_dir.exists():
+        return []
+    files: list[Path] = []
+    # Portal CSV at the top level.
+    portal = out_dir / "ifta_portal.csv"
+    if portal.exists():
+        files.append(portal)
+    # One Excel per truck (or any other intentionally-attached *.xlsx).
+    for p in sorted(out_dir.rglob("*.xlsx")):
+        if p.name not in _CUSTOMER_EXCLUDED_NAMES:
+            files.append(p)
+    return files
+
+
 def _to_attachment(path: Path) -> dict[str, Any]:
     return {"filename": path.name, "content": list(path.read_bytes())}
 
 
-def _read_review_note(out_dir: Path) -> str:
-    candidates = list(out_dir.rglob("review_note.md"))
+def _read_customer_note(out_dir: Path) -> str:
+    """Read the friendly customer email body. Falls back to review_note.md
+    only if the customer note wasn't produced (e.g. running against an older
+    submission's output dir from before this feature shipped)."""
+    candidates = list(out_dir.rglob("customer_note.md"))
+    if not candidates:
+        candidates = list(out_dir.rglob("review_note.md"))
     if not candidates:
         return ""
     return candidates[0].read_text(encoding="utf-8")
@@ -209,19 +238,28 @@ def _confirmation_text(sub: Submission, confirm_url: str) -> str:
     )
 
 
-def _packet_text(sub: Submission, review_note: str) -> str:
-    company_line = f"\nCarrier: {sub.company}" if sub.company else ""
-    note = review_note.strip()
+def _packet_text(sub: Submission, customer_note: str) -> str:
+    """Compose the packet email body.
+
+    The customer note (built by ifta.web.customer_view) is plain English and
+    self-contained — it already greets the customer, gives the headline status
+    + key totals, lists 'before you file' items, lists attachments, and signs
+    off. We just hand it through. Falls back to a minimal default if the note
+    is missing (older submissions, or a renderer bug).
+    """
+    body = (customer_note or "").strip()
+    if body:
+        return body + "\n"
+    # Defensive fallback so the email always says something useful even if
+    # render_customer_view returned an empty string.
+    company_line = f" for {sub.company}" if sub.company else ""
+    greeting = f"Hi {sub.name}," if sub.name else "Hi,"
     return (
-        f"Hi,\n\n"
-        f"Your {sub.quarter} IFTA packet is attached.{company_line}\n\n"
-        f"Attached files:\n"
-        f"  • ifta_portal.csv — upload this directly to your state portal\n"
-        f"  • review_note.md  — preflight findings + summary (below)\n"
-        f"  • trucks/*.xlsx   — one per truck (forward to each owner-operator)\n\n"
-        f"───── Review note ─────\n\n"
-        f"{note}\n\n"
-        f"Questions? Reply to this email — Eugene reads them.\n\n"
+        f"{greeting}\n\n"
+        f"Your {sub.quarter} IFTA packet{company_line} is attached.\n\n"
+        f"• ifta_portal.csv — upload this directly to your state's IFTA portal\n"
+        f"• trucks/<id>.xlsx — per-truck breakdown\n\n"
+        f"Questions? Just reply — Eugene reads every email.\n\n"
         f"— ArtJeck IFTA\n"
     )
 
