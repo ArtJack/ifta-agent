@@ -62,13 +62,20 @@ def process_submission(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     report = preflight_inputs(inbox)
+    # Step 8: preflight's job is to *advise*, not to reject the customer.
+    # Truly fatal cases (missing inbox, no supported files, ingest crash) are
+    # still errors and we surface them; data-quality issues (duplicates,
+    # high MPG, missing miles/fuel) are warnings the agent + customer-summary
+    # report can explain in plain English.
     if report.has_errors:
         raise PipelineError(
             "Preflight found ERROR-level issues in your uploaded files:\n"
             + format_preflight(report)
         )
 
-    data = ingest_folder(inbox)
+    # Honor preflight's auto-dedup: skip files we already know are
+    # duplicate summary/detail exports of the same data.
+    data = ingest_folder(inbox, skip_files=set(report.skipped_files))
     if not data.miles and not data.fuel:
         raise PipelineError(
             "No usable data parsed from the uploaded files. "
