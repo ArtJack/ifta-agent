@@ -108,6 +108,33 @@ class EmailClient:
             attachments=attachments,
         )
 
+    def send_more_files_request(self, sub: Submission, intake_brief: str) -> bool:
+        """Email the customer a friendly ask for missing files (Step 8 slice 3).
+
+        Sent when the operator taps "📩 Request more files" on the Telegram
+        approval card. The body and PDF reuse the same plain-English
+        renderers as Step 7's failure path but with softer framing — we're
+        not telling the customer "we couldn't process this", we're saying
+        "we're ready, we just need a bit more first."
+        """
+        if not self.config.enabled:
+            log.info("email disabled — skipping more-files request for %s", sub.id)
+            return False
+        from ifta.web.customer_view import (
+            render_more_files_request,
+            render_more_files_request_pdf,
+        )
+
+        text = render_more_files_request(sub=sub, intake_brief=intake_brief)
+        report_pdf = render_more_files_request_pdf(sub=sub, intake_brief=intake_brief)
+        attachments = [{"filename": "summary_report.pdf", "content": list(report_pdf)}]
+        return self._send(
+            to=sub.email,
+            subject=f"A few more files needed for your {sub.quarter} IFTA filing",
+            text=text,
+            attachments=attachments,
+        )
+
     def send_failure(self, sub: Submission, error: str) -> bool:
         if not self.config.enabled:
             log.info("email disabled — skipping failure email for %s", sub.id)
