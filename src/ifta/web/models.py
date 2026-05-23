@@ -18,6 +18,10 @@ class SubmissionStatus(StrEnum):
     DONE = "done"
     # Operator declined on Telegram; customer was emailed the rejection.
     REJECTED = "rejected"
+    # Operator tapped "Request more files" on Telegram; customer was emailed
+    # a plain-English ask for what's missing. The submission stays open and
+    # ready to advance when the customer re-uploads (Step 8 slice 3).
+    NEEDS_MORE_FILES = "needs_more_files"
     FAILED = "failed"
 
 

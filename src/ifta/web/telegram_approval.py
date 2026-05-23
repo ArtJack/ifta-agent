@@ -5,8 +5,9 @@ The web app sends the card; the existing ``ifta telegram-bot`` process
 handles the callback queries when an operator taps a button.
 
 Callback data format (must stay under 64 bytes):
-    ``wa:<submission_id>``   -- Accept
-    ``wd:<submission_id>``   -- Decline
+    ``wa:<submission_id>``   -- Accept (run the pipeline)
+    ``wd:<submission_id>``   -- Decline (final reject)
+    ``wm:<submission_id>``   -- Request more files from the customer
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ TELEGRAM_API = "https://api.telegram.org/bot{token}"
 # Callback data prefixes -- keep short (Telegram 64-byte limit).
 CB_WEB_ACCEPT = "wa"
 CB_WEB_DECLINE = "wd"
+CB_WEB_MORE_FILES = "wm"
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,30 @@ class TelegramApprovalClient:
             f"<b>Quarter:</b> {html.escape(sub.quarter)}\n"
             f"<b>Submission:</b> <code>{sub.id[:12]}</code>\n\n"
             f"Approved by {html.escape(decided_by)}."
+        )
+        return self._edit_message(chat_id, message_id, text)
+
+    def edit_card_more_files_requested(
+        self,
+        chat_id: int,
+        message_id: int,
+        sub: Submission,
+        decided_by: str,
+    ) -> bool:
+        """Edit the card in place to show 'more files requested from customer'.
+
+        Removes the inline keyboard so the operator can't double-tap; if the
+        customer later re-uploads via artjeck.com they'll get a fresh approval
+        card for the new submission.
+        """
+        company = html.escape(sub.company or sub.email)
+        text = (
+            f"<b>📩 More files requested from customer</b>\n\n"
+            f"<b>Customer:</b> {company}\n"
+            f"<b>Quarter:</b> {html.escape(sub.quarter)}\n"
+            f"<b>Submission:</b> <code>{sub.id[:12]}</code>\n\n"
+            f"Requested by {html.escape(decided_by)} -- "
+            f"the customer has been emailed a plain-English ask for the missing files."
         )
         return self._edit_message(chat_id, message_id, text)
 
@@ -231,18 +257,29 @@ def _build_card_html(sub: Submission, summary: str) -> str:
 
 
 def _build_inline_keyboard(submission_id: str) -> dict:
-    """Build the Telegram inline keyboard JSON for Accept/Decline."""
+    """Build the Telegram inline keyboard JSON for Accept / Decline / More files.
+
+    Three buttons on two rows to keep the labels readable on phone screens:
+    Accept + Decline on the top row (the most common decisions), and the
+    softer "Request more files" path below.
+    """
     return {
         "inline_keyboard": [
             [
                 {
-                    "text": "Accept",
+                    "text": "✅ Accept",
                     "callback_data": f"{CB_WEB_ACCEPT}:{submission_id}",
                 },
                 {
-                    "text": "Decline",
+                    "text": "❌ Decline",
                     "callback_data": f"{CB_WEB_DECLINE}:{submission_id}",
                 },
-            ]
+            ],
+            [
+                {
+                    "text": "📩 Request more files",
+                    "callback_data": f"{CB_WEB_MORE_FILES}:{submission_id}",
+                },
+            ],
         ]
     }
