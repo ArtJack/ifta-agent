@@ -46,3 +46,6 @@ data/web_submissions/
 
 # launchd / cloudflared logs (created by deploy/install.sh on the Mac mini)
 logs/
+
+# Worktree directories created by Claude Code — not part of the project.
+.claude/worktrees/
