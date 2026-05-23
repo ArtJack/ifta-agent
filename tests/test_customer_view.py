@@ -12,7 +12,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from ifta.web.customer_view import render_customer_summary, render_customer_view
+from ifta.web.customer_view import (
+    render_customer_failure,
+    render_customer_failure_report,
+    render_customer_summary,
+    render_customer_view,
+)
 from ifta.web.models import Submission, SubmissionStatus
 
 
@@ -393,3 +398,79 @@ def test_summary_shows_rate_warning_prominently() -> None:
     assert "⚠️ Rate notice" in body
     assert "rates unavailable" in body
     assert "Do NOT file yet" in body
+
+
+# ─── failure-path renderers ──────────────────────────────────────────────────
+
+
+# A real preflight error dump from the May-23 Rotex submission — used to
+# regression-check that none of its dev markup ever reaches the customer.
+_REAL_PREFLIGHT_ERROR = (
+    "Preflight found ERROR-level issues in your uploaded files:\n"
+    "ERRORS (1):\n"
+    "  [DUPLICATE_FUEL_SOURCE] file_Summary_by_State_-_DM_EXPRESS_INC.pdf and "
+    "file_ifta-DM_EXPRESS_INC.xlsx both parsed 8,753.74 gallons. This looks like "
+    "a duplicate summary/detail export. Remove one source or re-run with --force "
+    "only after manual confirmation.\n"
+    "\n"
+    "WARNINGS (3):\n"
+    "  [SUPPORTED_FILE_UNPARSED] file_IFTA_Report_-_DM_EXPRESS_INC.pdf is a supported "
+    "type but no mileage or fuel rows were parsed.\n"
+    "  [MULTIPLE_FUEL_SOURCES] Multiple files parsed fuel rows.\n"
+    "  [UNKNOWN_TRUCK] Some rows had no resolvable truck_id and were bucketed as 'unknown'."
+)
+
+
+def test_failure_body_friendly_with_no_dev_markup() -> None:
+    body = render_customer_failure(sub=_sub(), error=_REAL_PREFLIGHT_ERROR)
+    assert body.startswith("Hi Pat,\n")
+    assert "couldn't finish your packet yet" in body
+    assert "What to do next:" in body
+    assert "Reply to this email" in body
+    assert "https://artjeck.com/ifta/submit" in body
+    assert "summary_report.md" in body
+    for forbidden in (
+        "[DUPLICATE_FUEL_SOURCE]",
+        "[SUPPORTED_FILE_UNPARSED]",
+        "[MULTIPLE_FUEL_SOURCES]",
+        "[UNKNOWN_TRUCK]",
+        "ERRORS (1)",
+        "WARNINGS (3)",
+        "--force",
+        "Preflight found ERROR-level",
+        "file_Summary_by_State",
+        "file_ifta-DM_EXPRESS",
+        "file_IFTA_Report",
+    ):
+        assert forbidden not in body, f"failure email leaked dev markup: {forbidden!r}"
+
+
+def test_failure_body_humanizes_filenames() -> None:
+    body = render_customer_failure(sub=_sub(), error=_REAL_PREFLIGHT_ERROR)
+    # file_Summary_by_State_-_DM_EXPRESS_INC.pdf → readable filename.
+    assert "Summary by State - DM EXPRESS INC.pdf" in body
+    assert "ifta-DM EXPRESS INC.xlsx" in body
+
+
+def test_failure_body_handles_unparseable_error() -> None:
+    body = render_customer_failure(sub=_sub(), error="boom: KeyError 'state' (line 12)")
+    assert "couldn't finish" in body
+    # Generic-or-cleaned bullet, no Python traceback shape.
+    assert "Reply to this email" in body
+
+
+def test_failure_report_attachment_has_headlined_sections() -> None:
+    report = render_customer_failure_report(sub=_sub(), error=_REAL_PREFLIGHT_ERROR)
+    assert "# IFTA Q1-2026 — Couldn't Finish Yet (ACME LOGISTICS)" in report
+    assert "## What we noticed" in report
+    assert "## Also worth a look" in report  # warnings present
+    assert "## What to do next" in report
+    # No dev markup in the attachment either.
+    for forbidden in (
+        "[DUPLICATE_FUEL_SOURCE]",
+        "[SUPPORTED_FILE_UNPARSED]",
+        "ERRORS (1)",
+        "--force",
+        "file_Summary_by_State",
+    ):
+        assert forbidden not in report
