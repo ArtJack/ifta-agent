@@ -117,6 +117,9 @@ def test_send_packet_attaches_only_customer_facing_files(
         "Total tax due: $123.45\n",
         encoding="utf-8",
     )
+    (out_dir / "summary_report.md").write_text(
+        "# IFTA Q1-2026 Summary Report\n\n## Status: Ready to file\n", encoding="utf-8"
+    )
     trucks = out_dir / "trucks"
     trucks.mkdir()
     (trucks / "truck_800.xlsx").write_bytes(b"\x50\x4b\x03\x04fake-xlsx")
@@ -127,8 +130,9 @@ def test_send_packet_attaches_only_customer_facing_files(
     params = captured_sends[0]
     assert "Q1-2026" in params["subject"]
     filenames = {a["filename"] for a in params["attachments"]}
-    # Customer gets the portal CSV + truck Excel — and nothing else.
-    assert filenames == {"ifta_portal.csv", "truck_800.xlsx"}
+    # Customer gets the portal CSV + truck Excel + the detailed summary
+    # report — and none of the dev/audit files.
+    assert filenames == {"ifta_portal.csv", "summary_report.md", "truck_800.xlsx"}
     assert "review_note.md" not in filenames
     assert "findings.json" not in filenames
     assert "customer_note.md" not in filenames

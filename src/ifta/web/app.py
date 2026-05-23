@@ -89,6 +89,10 @@ def _turnstile_secret() -> str | None:
     return os.environ.get("TURNSTILE_SECRET_KEY") or None
 
 
+def _backend_key() -> str | None:
+    return os.environ.get("IFTA_WEB_BACKEND_KEY") or None
+
+
 def create_app() -> FastAPI:
     """Factory used by uvicorn (`ifta.web.app:create_app --factory`).
 
@@ -127,6 +131,7 @@ def create_app() -> FastAPI:
     approval_config = load_approval_config()
     approval_client = TelegramApprovalClient(approval_config)
     turnstile_secret = _turnstile_secret()
+    backend_key = _backend_key()
 
     db.init_db(db_path)
 
@@ -164,8 +169,9 @@ def create_app() -> FastAPI:
         # Cloudflare's widget emits a hidden input literally named
         # `cf-turnstile-response`, so the alias is required.
         cf_turnstile_response: str | None = Form(None, alias="cf-turnstile-response"),
-        mileage_file: UploadFile = File(...),
-        fuel_file: UploadFile = File(...),
+        mileage_file: UploadFile | None = File(None),
+        fuel_file: UploadFile | None = File(None),
+        files: list[UploadFile] = File(default=[]),
     ) -> dict[str, str]:
         email = (email or "").strip()
         if not EMAIL_RE.match(email):
@@ -175,7 +181,16 @@ def create_app() -> FastAPI:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-        if turnstile_secret:
+        # Server-to-server calls (e.g. the Next.js route on artjeck.com)
+        # authenticate with X-Backend-Key and skip the Turnstile CAPTCHA.
+        request_key = request.headers.get("x-backend-key")
+        has_valid_backend_key = (
+            backend_key is not None
+            and request_key is not None
+            and request_key == backend_key
+        )
+
+        if turnstile_secret and not has_valid_backend_key:
             if not cf_turnstile_response:
                 raise HTTPException(status_code=400, detail="missing CAPTCHA token")
             remote_ip = request.client.host if request.client else None
@@ -186,8 +201,23 @@ def create_app() -> FastAPI:
             ):
                 raise HTTPException(status_code=400, detail="CAPTCHA verification failed")
 
-        _validate_upload(mileage_file)
-        _validate_upload(fuel_file)
+        # Collect all uploads — either the multi-file `files` field, or the
+        # legacy mileage_file / fuel_file pair. At least one file is required.
+        all_uploads: list[tuple[UploadFile, str]] = []
+        if files:
+            for f in files:
+                all_uploads.append((f, "file"))
+        else:
+            if mileage_file:
+                all_uploads.append((mileage_file, "mileage"))
+            if fuel_file:
+                all_uploads.append((fuel_file, "fuel"))
+
+        if not all_uploads:
+            raise HTTPException(status_code=400, detail="at least one file is required")
+
+        for upload, _prefix in all_uploads:
+            _validate_upload(upload)
 
         # Sanitise optional text fields.
         name_clean = (name or "").strip() or None
@@ -220,8 +250,8 @@ def create_app() -> FastAPI:
         try:
             inbox = sub_root / "inbox" / qkey
             inbox.mkdir(parents=True, exist_ok=True)
-            _save_upload(mileage_file, inbox, max_file_bytes, prefix="mileage")
-            _save_upload(fuel_file, inbox, max_file_bytes, prefix="fuel")
+            for upload, prefix in all_uploads:
+                _save_upload(upload, inbox, max_file_bytes, prefix=prefix)
             sub = db.create_submission(
                 db_path,
                 submission_id=sid,

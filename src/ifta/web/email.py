@@ -186,9 +186,8 @@ def _collect_packet_files(out_dir: Path) -> Iterable[Path]:
 
 
 # Files the *customer* actually needs in their inbox. We deliberately exclude
-# review_note.md, findings.json, and customer_note.md (the latter is inlined
-# into the email body, the former two are dev/audit artifacts that confuse
-# truckers and accountants).
+# review_note.md and findings.json (dev/audit artifacts) and customer_note.md
+# (already inlined into the email body — no point re-attaching).
 _CUSTOMER_EXCLUDED_NAMES = {"review_note.md", "findings.json", "customer_note.md"}
 
 
@@ -200,6 +199,12 @@ def _collect_customer_attachments(out_dir: Path) -> Iterable[Path]:
     portal = out_dir / "ifta_portal.csv"
     if portal.exists():
         files.append(portal)
+    # Detailed customer summary report (plain English; problems, why-it-matters,
+    # what-to-do) — gives the customer/accountant a self-contained record while
+    # keeping the email body itself minimal.
+    summary = out_dir / "summary_report.md"
+    if summary.exists():
+        files.append(summary)
     # One Excel per truck (or any other intentionally-attached *.xlsx).
     for p in sorted(out_dir.rglob("*.xlsx")):
         if p.name not in _CUSTOMER_EXCLUDED_NAMES:

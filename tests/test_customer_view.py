@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from ifta.web.customer_view import render_customer_view
+from ifta.web.customer_view import render_customer_summary, render_customer_view
 from ifta.web.models import Submission, SubmissionStatus
 
 
@@ -29,9 +29,22 @@ def _sub(name: str | None = "Pat") -> Submission:
     )
 
 
-def _ret(*, tax: float = 15.75, mpg: float = 6.67, warning: str | None = None) -> SimpleNamespace:
+def _ret(
+    *,
+    tax: float = 15.75,
+    mpg: float = 6.67,
+    miles: float = 1000.0,
+    gallons: float = 150.0,
+    warning: str | None = None,
+) -> SimpleNamespace:
     """Stand-in for IftaReturn — we only read the few attributes used here."""
-    return SimpleNamespace(total_tax_due=tax, fleet_mpg=mpg, rate_warning=warning)
+    return SimpleNamespace(
+        total_tax_due=tax,
+        fleet_mpg=mpg,
+        fleet_miles=miles,
+        fleet_gallons=gallons,
+        rate_warning=warning,
+    )
 
 
 # ─── basic shape ─────────────────────────────────────────────────────────────
@@ -224,3 +237,159 @@ def test_no_dev_markup_leaks_under_realistic_agent_output() -> None:
     ]
     for tok in forbidden:
         assert tok not in body, f"developer markup leaked into customer email: {tok!r}"
+
+
+# ─── customer summary report ─────────────────────────────────────────────────
+
+
+def test_summary_basic_shape() -> None:
+    note = SimpleNamespace(
+        filing_status="READY_TO_FILE", issues=[], filing_reminders=[], next_steps=[]
+    )
+    body = render_customer_summary(
+        sub=_sub(),
+        ret=_ret(),
+        note=note,
+        truck_count=2,
+        attached_files=["ifta_portal.csv", "summary_report.md", "trucks/T1.xlsx"],
+    )
+    # Header carries quarter + carrier.
+    assert "# IFTA Q1-2026 Summary Report — ACME LOGISTICS" in body
+    # Plain-English status header (no raw enum).
+    assert "Status: Ready to file" in body
+    assert "READY_TO_FILE" not in body
+    # Key numbers section.
+    assert "Total tax due:** $15.75" in body
+    assert "Fleet MPG:** 6.67" in body
+    assert "Trucks on this return:** 2" in body
+    # Attachments listed.
+    assert "ifta_portal.csv" in body
+    assert "summary_report.md" in body
+    # No "Things to double-check" when there are no warnings.
+    assert "Things to double-check before filing" not in body
+
+
+def test_summary_problems_have_headline_why_what_sections() -> None:
+    note = SimpleNamespace(
+        filing_status="READY_WITH_WARNINGS",
+        issues=[
+            {
+                "severity": "warning",
+                "code": "MILES_SUSPICIOUSLY_FEW",
+                "claim": "Only 1 mileage row was parsed from file_miles.csv. A typical quarter has dozens to hundreds of rows.",
+                "filing_impact": "Missing mileage rows would understate taxable gallons and the filing could be incorrect.",
+                "recommended_action": "Verify the file you uploaded contains all Q1-2026 mileage.",
+            },
+        ],
+        filing_reminders=[],
+        next_steps=[],
+    )
+    body = render_customer_summary(sub=_sub(), ret=_ret(), note=note, truck_count=1)
+    assert "## Things to double-check before filing" in body
+    assert "### Only 1 mileage row was parsed from file_miles.csv." in body  # headline
+    assert "A typical quarter has dozens to hundreds of rows." in body  # detail
+    assert "**Why it matters:** Missing mileage rows would understate" in body
+    assert "**What to do:** Verify the file" in body
+    # Critical: no developer markup.
+    for forbidden in ["MILES_SUSPICIOUSLY_FEW", "[warning]", "Evidence:", "filing_impact"]:
+        assert forbidden not in body, f"summary leaked dev markup: {forbidden!r}"
+
+
+def test_summary_pairs_next_step_action_with_issue() -> None:
+    """When a next_step recommended_action matches an issue's claim, the
+    summary surfaces it as that issue's 'What to do' — not as a duplicate
+    standalone item."""
+    note = SimpleNamespace(
+        filing_status="READY_WITH_WARNINGS",
+        issues=[
+            {
+                "severity": "warning",
+                "code": "X",
+                "claim": "Mileage looks light for the quarter.",
+                "filing_impact": "Understates taxable gallons.",
+            },
+        ],
+        next_steps=[
+            {
+                "severity": "warning",
+                "code": "X",
+                "claim": "Mileage looks light for the quarter.",
+                "recommended_action": "Re-upload the full quarter's mileage.",
+            },
+        ],
+        filing_reminders=[],
+    )
+    body = render_customer_summary(sub=_sub(), ret=_ret(), note=note)
+    assert body.count("### Mileage looks light") == 1
+    assert "**What to do:** Re-upload the full quarter's mileage" in body
+
+
+def test_summary_does_not_double_emit_paired_next_step() -> None:
+    """Regression: an action paired into an issue's 'What to do' must not also
+    appear as a standalone empty problem entry from the next_steps pass."""
+    note = SimpleNamespace(
+        filing_status="READY_WITH_WARNINGS",
+        issues=[
+            {
+                "severity": "warning",
+                "code": "BASE",
+                "claim": "No IFTA base jurisdiction is on file.",
+                "filing_impact": "Wrong portal could reject the filing.",
+            },
+        ],
+        next_steps=[
+            {
+                "severity": "warning",
+                "code": "BASE",
+                "claim": "No IFTA base jurisdiction is on file.",
+                "recommended_action": "Reply with your IFTA base state so we file with the right portal.",
+            },
+        ],
+        filing_reminders=[],
+    )
+    body = render_customer_summary(sub=_sub(), ret=_ret(), note=note)
+    # The action shows once, paired with the issue — never as its own section.
+    assert body.count("Reply with your IFTA base state") == 1
+    assert body.count("### Reply with your IFTA base state") == 0
+
+
+def test_summary_renders_filing_reminders_as_tips() -> None:
+    note = SimpleNamespace(
+        filing_status="READY_TO_FILE",
+        issues=[],
+        filing_reminders=[
+            {
+                "severity": "info",
+                "code": "SURCHARGE_INCLUDED",
+                "claim": "Kentucky surcharge line is included — enter it as a separate line on the portal.",
+            },
+        ],
+        next_steps=[],
+    )
+    body = render_customer_summary(sub=_sub(), ret=_ret(), note=note)
+    assert "## Filing tips" in body
+    assert "Kentucky surcharge line is included" in body
+    assert "SURCHARGE_INCLUDED" not in body
+
+
+def test_summary_falls_back_to_findings_when_no_agent() -> None:
+    f1 = SimpleNamespace(
+        severity="warning",
+        code="MPG_HIGH",
+        message="Fleet MPG 14.27 is above 10.5 — likely missing fuel purchases.",
+    )
+    body = render_customer_summary(sub=_sub(), ret=_ret(mpg=14.27), findings=[f1])
+    assert "Things to double-check" in body
+    assert "Fleet MPG 14.27 is above 10.5" in body
+    assert "MPG_HIGH" not in body
+
+
+def test_summary_shows_rate_warning_prominently() -> None:
+    body = render_customer_summary(
+        sub=_sub(),
+        ret=_ret(warning="Q1-2026 rates unavailable — Q4-2025 used. Do not file."),
+        note=SimpleNamespace(filing_status="DO_NOT_FILE", issues=[], filing_reminders=[], next_steps=[]),
+    )
+    assert "⚠️ Rate notice" in body
+    assert "rates unavailable" in body
+    assert "Do NOT file yet" in body

@@ -23,7 +23,12 @@ from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
 from ifta.rates import fetch_rates
 from ifta.report import write_per_truck_filings, write_portal_csv
 from ifta.validator import Finding, format_findings, validate
-from ifta.web.customer_view import CUSTOMER_NOTE_FILENAME, render_customer_view
+from ifta.web.customer_view import (
+    CUSTOMER_NOTE_FILENAME,
+    CUSTOMER_SUMMARY_FILENAME,
+    render_customer_summary,
+    render_customer_view,
+)
 from ifta.web.models import Submission
 
 log = logging.getLogger("ifta.web.pipeline")
@@ -94,12 +99,28 @@ def process_submission(
         ret=ret,
     )
     write_findings_json(out_dir / FINDINGS_FILENAME, report=report, findings=findings)
-    # Plain-English customer-facing body for the packet email. Kept separate
-    # from review_note.md (which stays the dev/audit view).
+    # Customer-facing output, two layers:
+    #   - customer_note.md   → short email body (phone-readable)
+    #   - summary_report.md  → detailed plain-English report, attached for
+    #                          the customer/accountant's records
+    # review_note.md and findings.json stay operator/audit-only.
     truck_count = len({m.truck_id for m in data.miles} | {f.truck_id for f in data.fuel})
     (out_dir / CUSTOMER_NOTE_FILENAME).write_text(
         render_customer_view(
             sub=sub, ret=ret, note=note, findings=findings, truck_count=truck_count
+        ),
+        encoding="utf-8",
+    )
+    truck_xlsxs = sorted(p.name for p in (out_dir / "trucks").glob("*.xlsx")) if (out_dir / "trucks").exists() else []
+    attached_files = ["ifta_portal.csv", *(f"trucks/{n}" for n in truck_xlsxs), CUSTOMER_SUMMARY_FILENAME]
+    (out_dir / CUSTOMER_SUMMARY_FILENAME).write_text(
+        render_customer_summary(
+            sub=sub,
+            ret=ret,
+            note=note,
+            findings=findings,
+            truck_count=truck_count,
+            attached_files=attached_files,
         ),
         encoding="utf-8",
     )
