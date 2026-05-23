@@ -1556,6 +1556,7 @@ CB_CANCEL = "x"                     # x                        — done/dismiss
 # Web-intake submission approval (sent by the FastAPI app, handled here).
 CB_WEB_ACCEPT = "wa"                # wa:<submission_id>       — accept web submission
 CB_WEB_DECLINE = "wd"               # wd:<submission_id>       — decline web submission
+CB_WEB_MORE_FILES = "wm"            # wm:<submission_id>       — request more files
 
 
 def _list_pending(project_root: Path) -> list[PendingUser]:
@@ -2756,7 +2757,8 @@ async def web_approval_callback(
     data = query.data
     is_accept = data.startswith(f"{CB_WEB_ACCEPT}:")
     is_decline = data.startswith(f"{CB_WEB_DECLINE}:")
-    if not is_accept and not is_decline:
+    is_more_files = data.startswith(f"{CB_WEB_MORE_FILES}:")
+    if not (is_accept or is_decline or is_more_files):
         await query.answer("Unknown action.", show_alert=True)
         return
 
@@ -2813,6 +2815,42 @@ async def web_approval_callback(
             email_client.send_acknowledgement(sub)
 
         await query.answer("Approved -- queued for processing.")
+        return
+
+    # Request-more-files flow (Step 8 slice 3): mark the submission as
+    # NEEDS_MORE_FILES, edit the card in place, and email the customer a
+    # plain-English ask backed by the intake brief we already wrote to disk
+    # at submit time.
+    if is_more_files:
+        if sub.status != WebSubmissionStatus.PENDING_APPROVAL:
+            await query.answer(
+                f"Already decided ({sub.status.value}).", show_alert=True
+            )
+            return
+        sub = web_db.request_more_files_submission(
+            db_path, submission_id, decided_by=decided_by,
+        )
+        if sub is None:
+            await query.answer("DB error.", show_alert=True)
+            return
+
+        if chat_id is not None and message_id is not None:
+            with contextlib.suppress(Exception):
+                approval_client.edit_card_more_files_requested(
+                    chat_id, message_id, sub, decided_by,
+                )
+
+        # Load the intake brief from disk to drive the friendly email body.
+        # Falls back to a generic email if the brief is missing.
+        intake_brief_text = ""
+        if sub.intake_brief_path:
+            brief_path = config.project_root / sub.intake_brief_path
+            with contextlib.suppress(Exception):
+                intake_brief_text = brief_path.read_text(encoding="utf-8")
+        with contextlib.suppress(Exception):
+            email_client.send_more_files_request(sub, intake_brief_text)
+
+        await query.answer("Customer asked for more files.")
         return
 
     # Decline flow: ask for a reason via a follow-up message.
@@ -2899,7 +2937,7 @@ def build_application(config: BotConfig) -> Application:
     app.add_handler(
         CallbackQueryHandler(
             web_approval_callback,
-            pattern=rf"^(?:{CB_WEB_ACCEPT}:|{CB_WEB_DECLINE}:)",
+            pattern=rf"^(?:{CB_WEB_ACCEPT}:|{CB_WEB_DECLINE}:|{CB_WEB_MORE_FILES}:)",
         )
     )
     return app

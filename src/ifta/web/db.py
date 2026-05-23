@@ -358,6 +358,44 @@ def approve_submission(
     return _row_to_submission(row) if row else None
 
 
+def request_more_files_submission(
+    path: Path,
+    submission_id: str,
+    *,
+    decided_by: str,
+    reason: str = "",
+) -> Submission | None:
+    """Flip PENDING_APPROVAL -> NEEDS_MORE_FILES when an operator taps the
+    Telegram "Request more files" button. The submission stays open; the
+    customer is emailed a plain-English ask for the missing pieces and can
+    re-upload through artjeck.com to advance it (Step 8 slice 3)."""
+    decided_at = _now_iso()
+    reason_short = (reason or "")[:2000]
+    with _connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = ?, decided_at = ?, decided_by = ?,"
+            " decline_reason = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.NEEDS_MORE_FILES.value,
+                decided_at,
+                decided_by,
+                reason_short,
+                submission_id,
+                SubmissionStatus.PENDING_APPROVAL.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            row = conn.execute(
+                "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+            ).fetchone()
+            return _row_to_submission(row) if row else None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row else None
+
+
 def reject_submission(
     path: Path,
     submission_id: str,
