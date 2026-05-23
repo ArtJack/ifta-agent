@@ -418,3 +418,195 @@ def _split_first_sentence(text: str) -> tuple[str, str]:
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+# ─── customer-facing failure email ────────────────────────────────────────────
+
+
+def render_customer_failure(*, sub: Submission, error: str) -> str:
+    """Short, friendly body for the failure email.
+
+    The raw `error` string (from PipelineError or an unexpected exception) is
+    a developer dump — `[CODE] message`, "ERRORS (1):" headers, `file_` prefixed
+    filenames, "--force" jargon. Strip all of it and present the customer a
+    plain-English explanation + a clear "what to do next" path.
+    """
+    greeting = f"Hi {sub.name}," if sub.name else "Hi,"
+    bullets = _humanize_error_lines(error)
+    lines: list[str] = [greeting, ""]
+    lines.append(
+        f"We received your {sub.quarter} files, but we couldn't finish your packet yet — "
+        f"a couple of things need a closer look before we can file:"
+    )
+    lines.append("")
+    if bullets:
+        for b in bullets:
+            lines.append(f"• {b}")
+    else:
+        # Unparseable error string — fall back to a generic friendly message.
+        lines.append("• Something on our end didn't quite work with the files you sent.")
+    lines.append("")
+    lines.append("What to do next:")
+    lines.append("• Reply to this email with the missing or corrected files — Eugene reads every one.")
+    lines.append("• Or re-upload at https://artjeck.com/ifta/submit")
+    lines.append("")
+    lines.append("Your files are safe on our end. We'll pick up the moment we hear back.")
+    lines.append("")
+    lines.append("Attached: summary_report.md — full plain-English breakdown for your records.")
+    lines.append("")
+    lines.append("— ArtJeck IFTA")
+    return "\n".join(lines) + "\n"
+
+
+def render_customer_failure_report(*, sub: Submission, error: str) -> str:
+    """Detailed plain-English failure report (attached file).
+
+    Long-form companion to `render_customer_failure` for customers and their
+    accountants. Same anti-leakage rules: no codes, no JSON, no "[ERROR]"
+    prefixes, no `file_` underscore-mangled names.
+    """
+    carrier = sub.company or "your company"
+    errors, warnings = _humanize_error_sections(error)
+
+    lines: list[str] = [
+        f"# IFTA {sub.quarter} — Couldn't Finish Yet ({carrier})",
+        "",
+        f"_Prepared for {sub.email}._",
+        "",
+        f"We received your files for {sub.quarter}, but we hit a couple of issues "
+        f"that need your input before we can compute your filing. Nothing is lost — "
+        f"your files are saved with us, and we'll pick up the moment you reply with "
+        f"the missing pieces.",
+        "",
+        "## What we noticed",
+        "",
+    ]
+    if errors:
+        for headline, detail in errors:
+            lines.append(f"### {headline}")
+            lines.append("")
+            if detail:
+                lines.append(detail)
+                lines.append("")
+    else:
+        lines.append(
+            "Something on our end didn't quite work with the files you sent. "
+            "Reply to your packet email and Eugene will dig in."
+        )
+        lines.append("")
+
+    if warnings:
+        lines.append("## Also worth a look")
+        lines.append("")
+        for headline, detail in warnings:
+            text = headline if not detail else f"{headline} {detail}"
+            lines.append(f"- {text}")
+        lines.append("")
+
+    lines.append("## What to do next")
+    lines.append("")
+    lines.append("- Reply to your packet email with the missing or corrected files.")
+    lines.append("- Or re-upload everything at https://artjeck.com/ifta/submit")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("Questions? Reply to the email this report came with — Eugene reads every one.")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# Headers and noise we want stripped from the raw error dump.
+_NOISE_HEADERS = (
+    "preflight found error-level issues in your uploaded files:",
+    "preflight found warning-level issues in your uploaded files:",
+)
+_SECTION_HEADER = re.compile(r"^\s*(ERRORS|WARNINGS|INFOS)\s*\(\s*\d+\s*\)\s*:?\s*$", re.IGNORECASE)
+_BULLET = re.compile(r"^\s*[-•]?\s*\[([A-Z][A-Z0-9_]*)\]\s+(.+)$")
+# Presence-only check, used to decide whether the input looks like a preflight
+# dump. Distinct from _BULLET (which is line-anchored) because the structured
+# format guard runs against the whole multi-line string.
+_HAS_CODE_BULLET = re.compile(r"\[[A-Z][A-Z0-9_]+\]")
+_FILE_PREFIX = re.compile(r"\bfile_([A-Za-z0-9_.\-]+)")
+_FORCE_JARGON = re.compile(
+    r"\s*(?:Remove one source or )?re-?run with --force only after manual confirmation\.?",
+    re.IGNORECASE,
+)
+
+
+def _humanize_error_lines(error: str) -> list[str]:
+    """Flatten the raw preflight error dump into plain-English bullets.
+
+    Only returns bullets when the input looks like the structured preflight
+    format (recognisable `[CODE] ...` lines). Anything else — a raw Python
+    exception, a stack trace, an opaque "boom" — returns [] so the caller
+    can fall back to a single generic friendly bullet instead of leaking
+    developer output to the customer.
+    """
+    if not _HAS_CODE_BULLET.search(error):
+        return []
+    bullets: list[str] = []
+    for raw in error.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.lower() in _NOISE_HEADERS:
+            continue
+        if _SECTION_HEADER.match(line):
+            continue
+        m = _BULLET.match(line)
+        if m:
+            bullets.append(_clean_finding_text(m.group(2)))
+        elif bullets:
+            # Continuation line from a wrapped message — append to the most
+            # recent bullet rather than starting a new one.
+            bullets[-1] = (bullets[-1] + " " + _clean_finding_text(line)).strip()
+        # Free-floating lines before the first [CODE] bullet are dropped.
+    return [b for b in bullets if b]
+
+
+def _humanize_error_sections(error: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Same parse, but partitioned into (errors, warnings) and split into
+    headline + detail for the detailed report's section layout. Bails to
+    empty lists when the input doesn't carry the structured preflight format,
+    so opaque Python exceptions never reach the customer as bare text."""
+    if not _HAS_CODE_BULLET.search(error):
+        return [], []
+    errors: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
+    current = errors
+    for raw in error.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.lower() in _NOISE_HEADERS:
+            continue
+        sm = _SECTION_HEADER.match(line)
+        if sm:
+            kind = sm.group(1).upper()
+            current = warnings if kind == "WARNINGS" else errors
+            continue
+        m = _BULLET.match(line)
+        if m:
+            text = _clean_finding_text(m.group(2))
+            headline, detail = _split_first_sentence(text)
+            current.append((headline, detail))
+        # Lines that aren't [CODE] bullets are dropped — by this point we know
+        # the input has at least one [CODE] bullet (guarded above), so stray
+        # non-bullet lines are noise like the "Preflight found..." header.
+    return errors, warnings
+
+
+def _clean_finding_text(text: str) -> str:
+    """Strip developer markup from a single finding-message string."""
+    out = text
+    # Drop the leading [CODE] if a continuation line still has it.
+    out = re.sub(r"^\s*\[[A-Z][A-Z0-9_]*\]\s*", "", out)
+    # Restore filenames: file_ifta-DM_EXPRESS_INC.xlsx → "ifta-DM EXPRESS INC.xlsx".
+    out = _FILE_PREFIX.sub(lambda m: m.group(1).replace("_", " "), out)
+    # Drop dev jargon about --force.
+    out = _FORCE_JARGON.sub("", out)
+    # Collapse whitespace + tidy punctuation.
+    out = re.sub(r"\s+", " ", out).strip()
+    if out and not out.endswith((".", "!", "?")):
+        out += "."
+    return out
