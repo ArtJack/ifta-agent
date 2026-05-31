@@ -187,7 +187,8 @@ def _print_summary(ret) -> None:
 @click.option("--force", is_flag=True)
 def rates(quarter: str, fuel: str, force: bool) -> None:
     """Just fetch & cache the IFTA tax rates for a quarter."""
-    t = fetch_rates(quarter, fuel=fuel, force=force)
+    qkey = _parse_quarter(quarter)
+    t = fetch_rates(qkey, fuel=fuel, force=force)
     console.print(f"[bold]{t.quarter}[/] ({t.fuel}) — {len(t.rates)} jurisdictions")
     for s in sorted(t.rates):
         console.print(f"  {s}: ${t.rates[s]:.4f}")
