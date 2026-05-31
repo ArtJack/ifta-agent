@@ -317,6 +317,161 @@ Bounded read-only and isolated deterministic performance tests:
 The deterministic pipeline benchmark excludes AI review and outbound email
 latency.
 
+## Recommended Fixes
+
+### BUG-001 remediation: reserve unique upload paths
+
+Recommended implementation:
+
+- Update `_save_upload()` to choose a non-existing destination before writing.
+- Preserve the sanitized filename for the first upload.
+- Add a deterministic suffix before the extension for collisions, for example
+  `file_same.csv`, `file_same_2.csv`, and `file_same_3.csv`.
+- Keep the existing size-limit rollback behavior.
+- Apply the same rule to `/submit` and `/submit/add/{token}` because both call
+  `_save_upload()`.
+
+Suggested regression tests:
+
+- POST `/submit` with two `files[]` parts named `same.csv`; assert both files
+  exist and retain their original contents.
+- POST `/submit/add/{token}` with a filename that already exists in the
+  submission inbox; assert the supplement is retained under a unique name.
+- Repeat with sanitized names that collide, such as `a b.csv` and `a_b.csv`.
+
+### BUG-002 remediation: restore distinct summary filenames
+
+Recommended implementation:
+
+- Change `CUSTOMER_SUMMARY_FILENAME` to `summary_report.md`.
+- Leave `CUSTOMER_SUMMARY_PDF_FILENAME` as `summary_report.pdf`.
+- Keep customer email attachment selection PDF-only.
+- Keep the markdown artifact operator-only, as the existing comments and email
+  attachment filtering already describe.
+
+Suggested regression tests:
+
+- Run `process_submission()` and assert that both `summary_report.md` and
+  `summary_report.pdf` exist.
+- Assert the markdown file decodes as UTF-8 text.
+- Assert the PDF starts with `%PDF`.
+- Assert `EmailClient.send_packet()` attaches the PDF but not the markdown
+  debug artifact.
+
+### BUG-003 remediation: reject ambiguous explicit client selection
+
+Recommended implementation:
+
+- Treat an explicit `--client` value as a strict selector.
+- If the normalized client is not registered and the nested
+  `inbox/<client_id>/<quarter>` path does not exist, raise a user-facing error
+  instead of falling back to `inbox/<quarter>`.
+- Preserve the shared legacy layout only when `--client` is omitted.
+- Consider extracting the path choice into one helper that returns both inbox
+  and output paths so the two decisions cannot diverge.
+
+Suggested regression tests:
+
+- Run path resolution with `client=None`; assert the legacy shared inbox still
+  works.
+- Run path resolution with a registered client alias; assert the intended
+  nested inbox is used when present.
+- Run path resolution with `client="does_not_exist"`; assert a concise error
+  and verify that the shared quarter inbox is not processed.
+
+### BUG-004 remediation: validate fleet-size business bounds before persistence
+
+Recommended implementation:
+
+- Add a bounded FastAPI form type, for example a Pydantic
+  `Annotated[int, Field(ge=1, le=10000)]`, or perform an equivalent explicit
+  validation check before `db.create_submission()`.
+- Choose the upper bound based on supported business volume; `10000` is a
+  conservative placeholder, not a regulatory limit.
+- Return a clear `422` or `400` response for out-of-range values.
+- Ensure values outside SQLite's signed 64-bit range never reach persistence.
+
+Suggested regression tests:
+
+- Test `fleet_size=0`, `1`, upper-bound, and upper-bound-plus-one.
+- Test a negative value.
+- Test `2^63` and a non-numeric value; both must return validation responses,
+  never `500`.
+
+### BUG-005 remediation: validate base state against a canonical set
+
+Recommended implementation:
+
+- Reuse the project's canonical jurisdiction constants if they already model
+  the accepted base jurisdictions.
+- Otherwise add one shared set for valid US state or supported IFTA base codes.
+- Normalize whitespace and case first, then reject codes outside the set.
+- Decide explicitly whether Canadian provinces are supported for onboarding;
+  encode that choice in the shared set and tests.
+
+Suggested regression tests:
+
+- Accept normalized valid values such as `ca` and ` KY `.
+- Reject `ZZ`, one-character values, three-character values, and unsupported
+  jurisdictions.
+- Cover any intentionally supported Canadian province codes.
+
+### BUG-006 remediation: normalize CLI quarter parsing
+
+Recommended implementation:
+
+- Parse the `rates` quarter argument through the same `quarter_key()` or
+  `_parse_quarter()` path used by the other CLI commands.
+- Convert `ValueError` into `click.ClickException`.
+- Keep the accepted format guidance consistent across `run`, `rates`, and
+  other quarter-aware commands.
+
+Suggested regression tests:
+
+- Invoke `ifta rates --quarter 2026-Q9`; assert a non-zero exit code, concise
+  message, and no traceback.
+- Invoke with `Q4-2025` and `4Q2025`; assert both normalize successfully.
+
+### BUG-007 remediation: constrain terminal DB updates
+
+Recommended implementation:
+
+- Add expected-source-state predicates to the SQL updates.
+- Restrict `mark_done()` to `WHERE id = ? AND status = 'running'`.
+- Define the legitimate failure sources and restrict `mark_failed()` to those
+  states. At minimum, terminal `done` and `rejected` rows should not be
+  overwritten.
+- Return whether an update occurred, or return the current row, so callers can
+  detect rejected transitions.
+- Keep stale-running recovery as its own explicit transition.
+
+Suggested regression tests:
+
+- Assert `running -> done` succeeds.
+- Assert `pending_approval -> done` is rejected.
+- Assert an active processing state may become `failed`.
+- Assert `done -> failed` and `rejected -> failed` are rejected.
+- Assert stale-running recovery still marks only expired `running` rows as
+  failed.
+
+### Static-quality remediation
+
+Recommended implementation:
+
+- Type the Telegram edit payload using a JSON-compatible mapping accepted by
+  `requests.post()`.
+- Narrow `query.message` before reading Telegram message identifiers, and use
+  the supported accessor for `MaybeInaccessibleMessage`.
+- Run Ruff autofix on the notebook and review the resulting cell changes.
+
+Suggested verification:
+
+```bash
+.venv/bin/mypy src
+.venv/bin/ruff check .
+.venv/bin/pytest
+```
+
 ## Recommended Fix Order
 
 1. Fix duplicate `files[]` filename handling.
