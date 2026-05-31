@@ -37,7 +37,7 @@ from ifta.validator import Finding
 from ifta.web.models import Submission
 
 CUSTOMER_NOTE_FILENAME = "customer_note.md"
-CUSTOMER_SUMMARY_FILENAME = "summary_report.pdf"
+CUSTOMER_SUMMARY_FILENAME = "summary_report.md"
 CUSTOMER_SUMMARY_PDF_FILENAME = "summary_report.pdf"
 
 _FILING_STATUS_LINE = {
