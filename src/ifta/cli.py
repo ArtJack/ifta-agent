@@ -871,6 +871,79 @@ def receipt_eval_report(
     console.print(f"\n[dim]report written:[/] {_display_path(out_path)}")
 
 
+# --- data backup / restore (customer state) --------------------------------
+
+
+@main.command(name="backup")
+@click.option(
+    "--dest",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Backup dir. Default $IFTA_BACKUP_DIR or /Volumes/DISK/AI/ifta-backups.",
+)
+@click.option("--keep", default=14, show_default=True, help="Dated snapshots to retain.")
+def backup(dest: Path | None, keep: int) -> None:
+    """Snapshot data/ (customer state) to a dated .tar.gz and prune old ones."""
+    from ifta.backup import backup_data, list_snapshots
+
+    try:
+        snapshot = backup_data(PROJECT_ROOT, dest, keep=keep)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    size_kb = snapshot.stat().st_size / 1024
+    console.print(f"[green]✓[/] backup: {snapshot} [dim]({size_kb:.0f} KB)[/]")
+    console.print(f"[dim]{len(list_snapshots(dest))} snapshot(s) retained in {snapshot.parent}[/]")
+
+
+@main.command(name="backup-list")
+@click.option("--dest", default=None, type=click.Path(path_type=Path))
+def backup_list(dest: Path | None) -> None:
+    """List available data snapshots, newest last."""
+    from ifta.backup import list_snapshots
+
+    snaps = list_snapshots(dest)
+    if not snaps:
+        console.print("[yellow]No snapshots found.[/] Run `ifta backup` first.")
+        return
+    for snap in snaps:
+        console.print(f"  {snap.name}  [dim]({snap.stat().st_size / 1024:.0f} KB)[/]")
+    console.print(f"\n[dim]{len(snaps)} snapshot(s) in {snaps[0].parent}[/]")
+
+
+@main.command(name="backup-restore")
+@click.option(
+    "--snapshot",
+    "snapshot",
+    required=True,
+    type=click.Path(path_type=Path, exists=True),
+    help="The ifta-data-*.tar.gz to restore.",
+)
+@click.option(
+    "--into",
+    "into",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Where to extract. Defaults to data.restored-<ts>/ (never the live data dir).",
+)
+def backup_restore(snapshot: Path, into: Path | None) -> None:
+    """Extract a snapshot into a staging dir (then swap it in — see the runbook)."""
+    from datetime import datetime
+
+    from ifta.backup import restore_data
+
+    if into is None:
+        into = PROJECT_ROOT / f"data.restored-{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+    try:
+        extracted = restore_data(snapshot, into)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    console.print(f"[green]✓[/] restored to {_display_path(extracted)}")
+    console.print(
+        "[dim]Verify it, then swap: stop services → mv data data.bak → "
+        "mv this data → reinstall. See docs/IFTA_RUNBOOK.md.[/]"
+    )
+
+
 @main.command(name="web")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8000, show_default=True, type=int)
