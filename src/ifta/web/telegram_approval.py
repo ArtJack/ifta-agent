@@ -17,6 +17,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import requests
 
@@ -202,7 +203,7 @@ class TelegramApprovalClient:
         if not self.config.token:
             return False
         url = f"{TELEGRAM_API.format(token=self.config.token)}/editMessageText"
-        payload = {
+        payload: dict[str, Any] = {
             "chat_id": chat_id,
             "message_id": message_id,
             "text": text,
