@@ -560,6 +560,22 @@ _GENERIC_HTML = (
 )
 
 
+def _unique_path(dest: Path) -> Path:
+    """First non-existing path: foo.csv, then foo_2.csv, foo_3.csv, ...
+
+    Stops a second upload with the same name from silently overwriting the
+    first (BUG-001) — both files are kept so the pipeline sees complete data.
+    """
+    if not dest.exists():
+        return dest
+    n = 2
+    while True:
+        candidate = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int, *, prefix: str) -> Path:
     """Save an uploaded file with a field-name prefix to avoid collisions.
 
@@ -570,7 +586,7 @@ def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int, *, prefix: str) 
     """
     raw_name = SAFE_FILENAME_RE.sub("_", Path(f.filename or "upload").name)
     safe_name = f"{prefix}_{raw_name}"
-    dest = dest_dir / safe_name
+    dest = _unique_path(dest_dir / safe_name)
     written = 0
     with dest.open("wb") as out:
         while chunk := f.file.read(64 * 1024):

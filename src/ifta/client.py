@@ -236,23 +236,65 @@ def _context_from_record(record: ClientRecord, source: str) -> ClientContext:
     )
 
 
+class ClientInboxError(ValueError):
+    """The requested client does not match the available inbox data.
+
+    Raised instead of silently falling back to the shared quarter inbox, which
+    would process another carrier's data under the requested client's name.
+    """
+
+
+def _inbox_owner(project_root: Path, inbox: Path) -> str | None:
+    """The normalized client_id an inbox declares via its client.json, if any."""
+    meta = inbox / "client.json"
+    if not meta.exists():
+        return None
+    try:
+        payload = json.loads(meta.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    raw = payload.get("client_id") or payload.get("name")
+    return normalize_client_id(str(raw), project_root) if raw else None
+
+
+def _shared_inbox_for(project_root: Path, qkey: str, client_id: str) -> Path:
+    """The shared quarter inbox — but only when it isn't another carrier's data.
+
+    A per-client folder is unambiguous. The shared ``inbox/<quarter>/`` is only a
+    valid fallback when it has no declared owner or its owner matches the
+    requested client. Otherwise an unknown or mistyped client id would be handed
+    the primary carrier's data (BUG-003: wrong-carrier filing).
+    """
+    shared = project_root / "inbox" / qkey
+    owner = _inbox_owner(project_root, shared)
+    if owner is not None and owner != client_id:
+        raise ClientInboxError(
+            f"No inbox for client '{client_id}' in {qkey}. The shared inbox "
+            f"'{shared.as_posix()}' belongs to '{owner}'. Create "
+            f"inbox/{client_id}/{qkey}/ for this client, or check the --client value."
+        )
+    return shared
+
+
 def resolve_inbox(project_root: Path, quarter: str, client: str | None = None) -> Path:
     qkey = quarter_key(quarter)
-    if client:
-        client_id = normalize_client_id(client, project_root)
-        nested = project_root / "inbox" / client_id / qkey
-        if nested.exists():
-            return nested
-    return project_root / "inbox" / qkey
+    if not client:
+        return project_root / "inbox" / qkey
+    client_id = normalize_client_id(client, project_root)
+    nested = project_root / "inbox" / client_id / qkey
+    if nested.exists():
+        return nested
+    return _shared_inbox_for(project_root, qkey, client_id)
 
 
 def resolve_output_dir(project_root: Path, quarter: str, client: str | None = None) -> Path:
     qkey = quarter_key(quarter)
-    if client:
-        client_id = normalize_client_id(client, project_root)
-        nested_inbox = project_root / "inbox" / client_id / qkey
-        if nested_inbox.exists():
-            return project_root / "outputs" / client_id / qkey
+    if not client:
+        return project_root / "outputs" / qkey
+    client_id = normalize_client_id(client, project_root)
+    if (project_root / "inbox" / client_id / qkey).exists():
+        return project_root / "outputs" / client_id / qkey
+    _shared_inbox_for(project_root, qkey, client_id)  # raises on wrong-carrier mismatch
     return project_root / "outputs" / qkey
 
 
