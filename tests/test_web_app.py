@@ -168,6 +168,46 @@ def test_submit_rejects_disallowed_extension(client: TestClient) -> None:
     assert "unsupported" in detail or ".exe" in detail
 
 
+def test_submit_rejects_invalid_base_state(client: TestClient) -> None:
+    # BUG-005: "ZZ" is two letters but not a real jurisdiction.
+    r = client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026", "base_state": "ZZ"},
+        files={
+            "mileage_file": ("m.csv", b"x", "text/csv"),
+            "fuel_file": ("f.csv", b"x", "text/csv"),
+        },
+    )
+    assert r.status_code == 400
+    assert "base_state" in r.json()["detail"].lower()
+
+
+def test_submit_rejects_out_of_range_fleet_size(client: TestClient) -> None:
+    # BUG-004: negative, zero, and > SQLite int64 (which used to 500) are invalid.
+    for bad in ("-1", "0", "9223372036854775808"):
+        r = client.post(
+            "/submit",
+            data={"email": "a@b.co", "quarter": "Q1-2026", "fleet_size": bad},
+            files={
+                "mileage_file": ("m.csv", b"x", "text/csv"),
+                "fuel_file": ("f.csv", b"x", "text/csv"),
+            },
+        )
+        assert r.status_code in (400, 422), f"fleet_size={bad} -> {r.status_code}"
+
+
+def test_submit_accepts_valid_base_state_and_fleet_size(client: TestClient) -> None:
+    r = client.post(
+        "/submit",
+        data={"email": "a@b.co", "quarter": "Q1-2026", "base_state": "tx", "fleet_size": "5"},
+        files={
+            "mileage_file": ("m.csv", b"x", "text/csv"),
+            "fuel_file": ("f.csv", b"x", "text/csv"),
+        },
+    )
+    assert r.status_code == 202, r.text
+
+
 def test_submit_rejects_oversize_file(
     tmp_path: Path,
     submissions_root: Path,
