@@ -245,12 +245,21 @@ def claim_next_queued(path: Path) -> Submission | None:
 
 
 def mark_done(path: Path, submission_id: str) -> None:
+    # Only a job that is mid-flight (RUNNING) or being recovered after a
+    # transient failure (FAILED) may move to DONE. This blocks invalid jumps
+    # like pending_approval -> done (BUG-007).
     finished_at = _now_iso()
     with _connect(path) as conn:
         conn.execute(
             "UPDATE submissions SET status = ?, finished_at = ?, error = NULL"
-            " WHERE id = ?",
-            (SubmissionStatus.DONE.value, finished_at, submission_id),
+            " WHERE id = ? AND status IN (?, ?)",
+            (
+                SubmissionStatus.DONE.value,
+                finished_at,
+                submission_id,
+                SubmissionStatus.RUNNING.value,
+                SubmissionStatus.FAILED.value,
+            ),
         )
 
 
@@ -258,15 +267,21 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
     finished_at = _now_iso()
     # Truncate so a runaway stack trace doesn't bloat the DB.
     error_short = error[:4000]
+    # A job may fail from any non-terminal state (a RUNNING job that crashes, a
+    # confirmation email that never sends, etc.), but a terminal job must not be
+    # re-failed — this blocks invalid jumps like done -> failed (BUG-007).
     with _connect(path) as conn:
         conn.execute(
             "UPDATE submissions SET status = ?, finished_at = ?, error = ?"
-            " WHERE id = ?",
+            " WHERE id = ? AND status NOT IN (?, ?, ?)",
             (
                 SubmissionStatus.FAILED.value,
                 finished_at,
                 error_short,
                 submission_id,
+                SubmissionStatus.DONE.value,
+                SubmissionStatus.REJECTED.value,
+                SubmissionStatus.FAILED.value,
             ),
         )
 
