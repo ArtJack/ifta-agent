@@ -38,6 +38,7 @@ from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ifta.client import quarter_key
+from ifta.models import IFTA_JURISDICTIONS
 from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
 from ifta.web import db
 from ifta.web.email import EmailClient, load_email_config_from_env
@@ -222,10 +223,15 @@ def create_app() -> FastAPI:
         # Sanitise optional text fields.
         name_clean = (name or "").strip() or None
         base_state_clean = (base_state or "").strip().upper() or None
-        if base_state_clean and len(base_state_clean) != 2:
+        if base_state_clean and base_state_clean not in IFTA_JURISDICTIONS:
             raise HTTPException(
                 status_code=400,
-                detail="base_state must be a 2-letter state code (e.g. TX)",
+                detail="base_state must be a valid IFTA jurisdiction (2-letter code, e.g. TX).",
+            )
+        if fleet_size is not None and not (1 <= fleet_size <= 100_000):
+            raise HTTPException(
+                status_code=400,
+                detail="fleet_size must be a whole number between 1 and 100000.",
             )
         notes_clean = (notes or "").strip() or None
 

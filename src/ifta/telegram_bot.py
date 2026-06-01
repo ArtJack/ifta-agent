@@ -2791,7 +2791,7 @@ async def web_approval_callback(
 
     approval_client = TelegramApprovalClient(load_approval_config())
     email_client = EmailClient(load_email_config_from_env())
-    chat_id = query.message.chat_id if query.message else None
+    chat_id = query.message.chat.id if query.message else None
     message_id = query.message.message_id if query.message else None
 
     if is_accept:
