@@ -10,6 +10,7 @@ from rich.table import Table
 
 from ifta.calc import compute_per_truck_lines, compute_return
 from ifta.client import (
+    ClientInboxError,
     load_client_context,
     load_registry,
     quarter_key,
@@ -45,6 +46,22 @@ def _parse_quarter(quarter: str) -> str:
         raise click.ClickException(str(e)) from e
 
 
+def _resolve_inbox(quarter: str, client: str | None) -> Path:
+    """resolve_inbox, surfacing the wrong-carrier guard as a clean CLI error."""
+    try:
+        return resolve_inbox(PROJECT_ROOT, quarter, client)
+    except ClientInboxError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_output_dir(quarter: str, client: str | None) -> Path:
+    """resolve_output_dir, surfacing the wrong-carrier guard as a clean CLI error."""
+    try:
+        return resolve_output_dir(PROJECT_ROOT, quarter, client)
+    except ClientInboxError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @click.group()
 def main() -> None:
     """IFTA quarterly filing pipeline."""
@@ -74,8 +91,8 @@ def run(
 ) -> None:
     """Process raw files in inbox/<quarter>/ and emit outputs/<quarter>/."""
     qkey = _parse_quarter(quarter)
-    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
-    out_dir = (out_dir or resolve_output_dir(PROJECT_ROOT, qkey, client)).resolve()
+    inbox = (inbox or _resolve_inbox(qkey, client)).resolve()
+    out_dir = (out_dir or _resolve_output_dir(qkey, client)).resolve()
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
     portal_name = portal or client_context.portal or "generic"
 
@@ -178,7 +195,7 @@ def rates(quarter: str, fuel: str, force: bool) -> None:
 
 def _load_quarter(qkey: str, fuel: str, force: bool, client: str | None = None):
     """Re-run ingest + compute for a quarter; used by review/ask."""
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client)
+    inbox = _resolve_inbox(qkey, client)
     if not inbox.exists():
         raise click.ClickException(f"inbox not found: {inbox}")
     data = ingest_folder(inbox)
@@ -231,7 +248,7 @@ def review(
     )
 
     qkey = _parse_quarter(quarter)
-    out_dir = resolve_output_dir(PROJECT_ROOT, qkey, client)
+    out_dir = _resolve_output_dir(qkey, client)
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client)
 
     console.print(
@@ -372,8 +389,8 @@ def deliver(
     import subprocess
 
     qkey = _parse_quarter(quarter)
-    inbox = resolve_inbox(PROJECT_ROOT, qkey, client).resolve()
-    out_dir = resolve_output_dir(PROJECT_ROOT, qkey, client).resolve()
+    inbox = _resolve_inbox(qkey, client).resolve()
+    out_dir = _resolve_output_dir(qkey, client).resolve()
     if not inbox.exists():
         raise click.ClickException(f"inbox not found: {inbox}")
     client_context = load_client_context(PROJECT_ROOT, qkey, client=client, inbox=inbox)
@@ -550,8 +567,8 @@ def intake(
     from ifta.intake.report import build_intake_payload, write_intake_outputs
 
     qkey = _parse_quarter(quarter)
-    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
-    out_dir = (out_dir or resolve_output_dir(PROJECT_ROOT, qkey, client)).resolve()
+    inbox = (inbox or _resolve_inbox(qkey, client)).resolve()
+    out_dir = (out_dir or _resolve_output_dir(qkey, client)).resolve()
     receipt_candidates = receipt_candidates or inbox / "receipt_candidates.json"
     if not receipt_candidates.exists():
         receipt_candidates = None
@@ -603,9 +620,9 @@ def intake_apply(
     from ifta.intake.report import apply_approved_proposals_csv
 
     qkey = _parse_quarter(quarter)
-    inbox = (inbox or resolve_inbox(PROJECT_ROOT, qkey, client)).resolve()
+    inbox = (inbox or _resolve_inbox(qkey, client)).resolve()
     proposed = (
-        proposed or resolve_output_dir(PROJECT_ROOT, qkey, client) / "proposed_fuel_additions.csv"
+        proposed or _resolve_output_dir(qkey, client) / "proposed_fuel_additions.csv"
     )
     out_path = out_path or inbox / "derived_fuel_from_receipts.csv"
     if not proposed.exists():
@@ -618,6 +635,239 @@ def intake_apply(
     console.print(f"  approved rows written: {count}")
     if count == 0:
         console.print("[yellow]No approved=yes rows were found.[/]")
+
+
+@main.command(name="intake-extract")
+@click.option("--quarter", required=True, help="e.g. Q2-2026")
+@click.option("--client", default=None, help="Client id/name, e.g. dm_express")
+@click.option(
+    "--images",
+    "images_dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Folder of receipt photos. Defaults to inbox/fuel-photos/.",
+)
+@click.option(
+    "--model",
+    default="claude-sonnet-4-6",
+    show_default=True,
+    type=click.Choice(["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"]),
+)
+@click.option(
+    "--out",
+    "out_path",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Where to write candidates. Defaults to the quarter inbox's receipt_candidates.json.",
+)
+@click.option("--max-tokens", default=1024, show_default=True)
+def intake_extract(
+    quarter: str,
+    client: str | None,
+    images_dir: Path | None,
+    model: str,
+    out_path: Path | None,
+    max_tokens: int,
+) -> None:
+    """Read dirty fuel-receipt photos with Claude vision into receipt_candidates.json.
+
+    Drop phone photos (JPG/PNG/HEIC/…) into inbox/fuel-photos/, then run this. The
+    output feeds `ifta intake`, which reviews, de-dupes, and gates every receipt behind
+    human approval before any of it can touch the filing math. Nothing is filed here.
+    """
+    from ifta.intake.extract import discover_images, extract_one, write_candidates_json
+
+    qkey = _parse_quarter(quarter)
+    images_dir = (images_dir or PROJECT_ROOT / "inbox" / "fuel-photos").resolve()
+    out_path = (
+        out_path or _resolve_inbox(qkey, client) / "receipt_candidates.json"
+    ).resolve()
+
+    images = discover_images(images_dir)
+    if not images:
+        raise click.ClickException(f"No receipt photos found in {_display_path(images_dir)}/")
+
+    console.rule(f"[bold]IFTA Receipt Vision — {qkey}")
+    console.print(f"  images: {_display_path(images_dir)}/  ({len(images)} found)")
+    console.print(f"  model:  {model}")
+
+    candidates = []
+    with console.status("[cyan]reading receipts…[/]"):
+        for path in images:
+            try:
+                candidate = extract_one(path, model=model, max_tokens=max_tokens)
+            except Exception as exc:  # one unreadable photo must not kill the batch
+                console.print(f"  [red]✗[/] {path.name}: {exc}")
+                continue
+            candidates.append(candidate)
+            low = [k for k, v in candidate.confidence.items() if v < 0.5]
+            flag = f" [yellow](low-confidence: {', '.join(low)})[/]" if low else ""
+            gallons = candidate.gallons if candidate.gallons is not None else "?"
+            console.print(
+                f"  [green]✓[/] {path.name} → {candidate.date or '?'} "
+                f"{candidate.state or '?'} {gallons} gal{flag}"
+            )
+
+    if not candidates:
+        raise click.ClickException("No receipts could be read. Check photo quality and retry.")
+
+    write_candidates_json(candidates, out_path)
+    console.print(f"\n  ✓ wrote [bold]{len(candidates)}[/] candidate(s): {_display_path(out_path)}")
+    client_flag = f" --client {client}" if client else ""
+    console.print(
+        "\n[dim]Next — review them (nothing is filed until you approve):[/]\n"
+        f"  ifta intake --quarter {qkey}{client_flag}"
+    )
+
+
+# --- receipt-extraction eval (you are the human oracle) --------------------
+
+_RECEIPT_LABEL_FIELDS = [
+    ("date", "Purchase date YYYY-MM-DD. Blank if unreadable — do NOT guess."),
+    ("state", "2-letter state where the STATION is. Blank if unsure."),
+    ("gallons", "DIESEL gallons pumped (number). Blank if unreadable."),
+    ("amount", "Fuel amount in USD (number). Blank if unreadable."),
+    ("fuel_type", "diesel / DEF / reefer. Blank if unclear."),
+    ("vendor", "Truck stop / brand. Blank if unreadable."),
+    ("truck_id", "Unit/truck number if written. Blank if absent."),
+    ("card_last4", "Last 4 of the card. Blank if absent."),
+    ("invoice", "Receipt/invoice number. Blank if absent."),
+]
+_RECEIPT_DIFFICULTY = ["clean", "faded", "crumpled", "glare", "handwritten", "partial", "other"]
+_RECEIPT_PAYMENT = ["", "fleet_card", "personal_card", "cash", "unknown"]
+_RECEIPT_MODELS = ["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"]
+
+
+def _eval_paths(images: Path | None, labels_path: Path | None) -> tuple[Path, Path]:
+    images = (images or PROJECT_ROOT / "evals" / "receipts").resolve()
+    labels_path = (labels_path or PROJECT_ROOT / "evals" / "receipt_labels.json").resolve()
+    return images, labels_path
+
+
+@main.group(name="receipt-eval")
+def receipt_eval() -> None:
+    """Measure receipt-vision accuracy vs a human gold set. See docs/RECEIPT_EVAL_GUIDE.md."""
+
+
+@receipt_eval.command(name="label")
+@click.option("--images", default=None, type=click.Path(path_type=Path))
+@click.option("--labels", "labels_path", default=None, type=click.Path(path_type=Path))
+@click.option("--redo", is_flag=True, help="Re-label receipts that already have a gold label.")
+def receipt_eval_label(images: Path | None, labels_path: Path | None, redo: bool) -> None:
+    """Label receipts BLIND — read each photo and record the true values."""
+    import contextlib
+    import subprocess
+
+    from ifta.intake.extract import discover_images
+    from ifta.receipt_eval import load_json, save_json
+
+    images, labels_path = _eval_paths(images, labels_path)
+    photos = discover_images(images)
+    if not photos:
+        raise click.ClickException(
+            f"No receipt photos in {_display_path(images)}/. Add your eval set there first."
+        )
+    labels = load_json(labels_path)
+    todo = [p for p in photos if redo or p.name not in labels]
+    if not todo:
+        console.print("[green]All receipts already labeled.[/] Use --redo to redo any.")
+        return
+
+    console.rule("[bold]Receipt labeling — you are the oracle")
+    console.print(
+        "[dim]Read each photo and type the TRUE value. Press Enter to leave blank.\n"
+        "Blank = unreadable/absent — do NOT guess; a blank means the model should abstain too.[/]\n"
+    )
+    for i, photo in enumerate(todo, 1):
+        console.print(f"[bold cyan]({i}/{len(todo)}) {photo.name}[/]")
+        with contextlib.suppress(Exception):
+            subprocess.run(["open", str(photo)], check=False)
+        record: dict[str, object] = {}
+        for field, hint in _RECEIPT_LABEL_FIELDS:
+            console.print(f"  [dim]{hint}[/]")
+            value = click.prompt(f"  {field}", default="", show_default=False).strip()
+            if value:
+                record[field] = value
+        payment = click.prompt(
+            "  payment_method", type=click.Choice(_RECEIPT_PAYMENT), default="", show_default=False
+        )
+        if payment:
+            record["payment_method"] = payment
+        record["_difficulty"] = click.prompt(
+            "  difficulty", type=click.Choice(_RECEIPT_DIFFICULTY), default="clean"
+        )
+        notes = click.prompt("  notes (optional)", default="", show_default=False).strip()
+        if notes:
+            record["_notes"] = notes
+        labels[photo.name] = record
+        save_json(labels_path, labels)  # incremental save: stop and resume any time
+        console.print("  [green]✓ saved[/]\n")
+
+    console.print(f"[green]Done.[/] {len(todo)} labeled → {_display_path(labels_path)}")
+
+
+@receipt_eval.command(name="run")
+@click.option(
+    "--model", default="claude-sonnet-4-6", show_default=True, type=click.Choice(_RECEIPT_MODELS)
+)
+@click.option("--images", default=None, type=click.Path(path_type=Path))
+@click.option("--labels", "labels_path", default=None, type=click.Path(path_type=Path))
+@click.option("--out", "out_path", default=None, type=click.Path(path_type=Path))
+def receipt_eval_run(
+    model: str, images: Path | None, labels_path: Path | None, out_path: Path | None
+) -> None:
+    """Run the extractor over every labeled receipt and cache predictions (costs money)."""
+    from ifta.receipt_eval import load_json, run_predictions, save_json
+
+    images, labels_path = _eval_paths(images, labels_path)
+    out_path = (out_path or PROJECT_ROOT / "evals" / "predictions" / f"{model}.json").resolve()
+    labels = load_json(labels_path)
+    if not labels:
+        raise click.ClickException("No labels yet. Run `ifta receipt-eval label` first.")
+
+    console.rule(f"[bold]Receipt eval — {model} over {len(labels)} labeled receipt(s)")
+    console.print("[dim]One vision call per receipt — this costs money.[/]")
+    with console.status("[cyan]extracting…[/]"):
+        predictions, errors = run_predictions(images, labels, model=model)
+    save_json(out_path, predictions)
+    console.print(
+        f"  ✓ {len(predictions)} predicted, {len(errors)} error(s) → {_display_path(out_path)}"
+    )
+    for name, err in errors.items():
+        console.print(f"  [red]✗[/] {name}: {err}")
+    console.print(f"\n[dim]Next:[/] ifta receipt-eval report --model {model}")
+
+
+@receipt_eval.command(name="report")
+@click.option("--model", default="claude-sonnet-4-6", show_default=True)
+@click.option("--labels", "labels_path", default=None, type=click.Path(path_type=Path))
+@click.option("--predictions", "pred_path", default=None, type=click.Path(path_type=Path))
+@click.option("--out", "out_path", default=None, type=click.Path(path_type=Path))
+def receipt_eval_report(
+    model: str, labels_path: Path | None, pred_path: Path | None, out_path: Path | None
+) -> None:
+    """Score predictions against the gold set: accuracy, calibration, error list."""
+    from rich.markdown import Markdown
+
+    from ifta.receipt_eval import aggregate, load_json, render_report_md
+
+    _, labels_path = _eval_paths(None, labels_path)
+    pred_path = (pred_path or PROJECT_ROOT / "evals" / "predictions" / f"{model}.json").resolve()
+    labels = load_json(labels_path)
+    predictions = load_json(pred_path)
+    if not labels:
+        raise click.ClickException("No labels found. Run `ifta receipt-eval label` first.")
+    if not predictions:
+        raise click.ClickException(
+            f"No predictions at {_display_path(pred_path)}. Run `ifta receipt-eval run` first."
+        )
+
+    markdown = render_report_md(aggregate(labels, predictions))
+    console.print(Markdown(markdown))
+    out_path = (out_path or PROJECT_ROOT / "evals" / f"receipt_eval_report_{model}.md").resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(markdown, encoding="utf-8")
+    console.print(f"\n[dim]report written:[/] {_display_path(out_path)}")
 
 
 @main.command(name="web")
