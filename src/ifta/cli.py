@@ -232,12 +232,19 @@ EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max"]
     show_default=True,
     help="Thinking depth — higher = more thorough, more expensive.",
 )
+@click.option(
+    "--trace",
+    "trace_on",
+    is_flag=True,
+    help="Capture + save a trace of the agent's steps (tools, turns, tokens).",
+)
 def review(
     quarter: str,
     client: str | None,
     model: str,
     max_tokens: int,
     effort: str,
+    trace_on: bool,
 ) -> None:
     """Pre-filing review: agent verifies the return before you upload to the gov portal."""
     from ifta.agent import (
@@ -256,11 +263,29 @@ def review(
         f"[bold]Reviewing {qkey} for {client_context.client_name} with {model} "
         f"(max_tokens={max_tokens}, effort={effort})…"
     )
-    note, agent_metrics = agent_review(
-        qkey, client=client, model=model, max_tokens=max_tokens, effort=effort
-    )
+    from contextlib import nullcontext
+
+    from ifta.agent.tracing import render_trace, save_trace, traced
+
+    label = f"review {qkey}" + (f" {client}" if client else "")
+    with (traced(label, model) if trace_on else nullcontext(None)) as trace:
+        note, agent_metrics = agent_review(
+            qkey, client=client, model=model, max_tokens=max_tokens, effort=effort
+        )
     path = write_review_md(note, out_dir / "review_note.md", metrics=agent_metrics)
     console.print(f"  ✓ {_display_path(path)}")
+    if trace is not None:
+        from datetime import datetime
+
+        trace.close(
+            final_text=note.summary, metrics=agent_metrics, filing_status=note.filing_status
+        )
+        tpath = save_trace(
+            trace, PROJECT_ROOT / "data" / "traces" / f"{qkey}-{datetime.now():%Y%m%dT%H%M%S}.json"
+        )
+        console.print("")
+        console.print(render_trace(trace))
+        console.print(f"[dim]trace saved: {_display_path(tpath)}[/]")
     console.print(
         f"  [dim]Agent run: {agent_metrics.wall_time_seconds:.1f}s · "
         f"{agent_metrics.output_tokens:,} output tokens · "
