@@ -46,7 +46,7 @@ _PAYMENT_METHODS = {"fleet_card", "personal_card", "cash", "unknown"}
 ExtractCall = Callable[[Path], dict[str, Any]]
 
 
-EXTRACTION_PROMPT = """You read a single photo of a US/Canada trucking fuel receipt and output structured data.
+EXTRACTION_PROMPT = """You read a photo of a US/Canada trucking fuel receipt and output structured data.
 
 Return ONLY one JSON object. No prose, no markdown fences.
 
@@ -58,26 +58,33 @@ Fields (use null when a value is not clearly legible):
   state           2-letter US state / Canadian province code of the station
   gallons         number — US gallons of DIESEL pumped (the pump quantity)
   amount          number — total USD charged for the fuel
-  fuel_type       e.g. "diesel", "DEF", "reefer"
-  truck_id        unit / truck number if written on the receipt
+  fuel_type       e.g. "diesel", "DEF", "reefer"  ("DSL" means diesel)
+  truck_id        unit / truck (or vehicle) number if written on the receipt
   driver          driver name if present
   card_last4      last 4 digits of the card used
-  invoice         receipt / invoice number
+  invoice         the receipt reference number
   payment_method  one of: fleet_card, personal_card, cash, unknown
   confidence      object mapping each field you filled to a number 0.0-1.0
 
-CRITICAL — this feeds a government tax filing:
-- NEVER guess or invent a value. If you cannot clearly read a field, set it to null
-  and give it a confidence <= 0.3 (or omit it from confidence entirely).
-- Real receipts are messy: faded thermal print, crumpled paper, glare, motion blur,
-  torn edges, handwriting, multiple line items. When the image is poor, return FEWER
-  fields with honest low confidence rather than plausible-looking data.
-- gallons must be the DIESEL quantity from the pump line — never DEF gallons and never
-  a dollar figure. If only DEF is shown, set gallons to null.
-- state is where the STATION is. If only the city/address is legible, fill those and
-  leave state null.
-- payment_method: "fleet_card" for a fleet/fuel card (Comdata, EFS, TCH, fuel-card
-  numbers); "cash" or "personal_card" only when clearly indicated; otherwise "unknown".
+CRITICAL — this feeds a government tax filing. NEVER guess or invent a value: if a field
+is not clearly legible, set it to null with confidence <= 0.3. Real receipts are messy
+(faded thermal, crumpled, glare, blur, torn, handwriting). Prefer FEWER fields with honest
+low confidence over plausible-looking data.
+
+How a human reads these — apply the same rules:
+- gallons = the DIESEL pump quantity, never DEF and never a dollar figure. A trailing "G"
+  means gallons (e.g. "178.557G"). Report what you read — do not recompute it.
+- VOID / returned lines: ignore the voided amount; use the amount actually charged.
+- state = where the STATION is. If the 2-letter code is not printed, infer it from the
+  city/address; if location is unreadable too, leave state null but fill city/address.
+- date: accept MM/DD/YYYY, "04 2026", short "'26" (= 2026), "Apr 2026". The current year is
+  2026 — a far-future or very old year is suspicious, so keep the most plausible reading at
+  lower confidence rather than discarding it.
+- invoice: use "Invoice #" if present, else "Receipt #", else "Transaction #".
+- payment_method: a truck #/driver ID, or "TCH"/"WEX"/"Comdata"/"EFS"/"TCHPFJ" -> fleet_card.
+  "Company: PERSONAL", "VISA CREDIT", or no truck #/driver ID -> personal_card. Else unknown.
+- MULTIPLE RECEIPTS in one image: if you see more than one distinct receipt, extract the
+  single most complete one and set EVERY confidence <= 0.4 so a human reviews it.
 
 Return the JSON object now."""
 
