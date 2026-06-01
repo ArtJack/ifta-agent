@@ -50,6 +50,7 @@ evals/receipts/*
 evals/receipt_labels*.json
 evals/predictions/
 evals/receipt_eval_report_*.md
+evals/benchmark_history*.jsonl
 
 # launchd / cloudflared logs (created by deploy/install.sh on the Mac mini)
 logs/

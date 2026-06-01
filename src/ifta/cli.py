@@ -944,6 +944,69 @@ def backup_restore(snapshot: Path, into: Path | None) -> None:
     )
 
 
+@main.command(name="benchmark")
+@click.option(
+    "--model", default="claude-sonnet-4-6", show_default=True,
+    help="Model whose predictions to score (also the history label).",
+)
+@click.option("--labels", "labels_path", default=None, type=click.Path(path_type=Path))
+@click.option("--predictions", "pred_path", default=None, type=click.Path(path_type=Path))
+@click.option("--record/--no-record", default=True, help="Append this run to the benchmark history.")
+def benchmark(model: str, labels_path: Path | None, pred_path: Path | None, record: bool) -> None:
+    """Gate the receipt extractor against thresholds and track accuracy over time.
+
+    Scores the latest predictions (run `ifta receipt-eval run` first) against the gold set
+    and the benchmark thresholds, compares to the previous run, and records the scorecard.
+    Exits non-zero if a threshold fails or a tax-critical field regresses — so it can gate
+    a prompt/model change. See docs/BENCHMARK.md.
+    """
+    from ifta import benchmark as bench
+    from ifta.receipt_eval import aggregate, load_json
+
+    labels_path = (labels_path or PROJECT_ROOT / "evals" / "receipt_labels.json").resolve()
+    pred_path = (pred_path or PROJECT_ROOT / "evals" / "predictions" / f"{model}.json").resolve()
+    history_path = PROJECT_ROOT / "evals" / "benchmark_history.jsonl"
+
+    labels = load_json(labels_path)
+    predictions = load_json(pred_path)
+    if not labels:
+        raise click.ClickException("No labels found. Run `ifta receipt-eval label` first.")
+    if not predictions:
+        raise click.ClickException(
+            f"No predictions at {_display_path(pred_path)}. Run `ifta receipt-eval run` first."
+        )
+
+    report = aggregate(labels, predictions)
+    result = bench.evaluate(report)
+    card = bench.scorecard(report, model=model)
+    history = bench.load_history(history_path)
+    comparison = bench.compare(card, history[-1]) if history else None
+    regressions = comparison["regressions"] if comparison else []
+
+    console.rule(f"[bold]IFTA receipt benchmark — {model}")
+    for check in result.checks:
+        mark = "[green]✓[/]" if check.passed else "[red]✗[/]"
+        console.print(f"  {mark} {check.name:22} {check.detail}")
+    if regressions:
+        console.print("\n[red]Regressions vs previous run:[/]")
+        for reg in regressions:
+            console.print(
+                f"  ✗ {reg['field']}: {reg['from'] * 100:.0f}% → {reg['to'] * 100:.0f}% "
+                f"({reg['delta'] * 100:+.0f} pts)"
+            )
+    elif comparison is not None:
+        console.print("\n[dim]No regressions vs previous run.[/]")
+
+    if record:
+        bench.append_history(card, history_path)
+        console.print(f"\n[dim]recorded run #{len(history) + 1} → {_display_path(history_path)}[/]")
+
+    passed = result.passed and not regressions
+    console.print(f"\n  benchmark: {'[bold green]PASS[/]' if passed else '[bold red]FAIL[/]'}")
+    if not passed:
+        raise SystemExit(1)
+
+
 @main.command(name="web")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=8000, show_default=True, type=int)
