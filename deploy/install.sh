@@ -17,7 +17,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LOGS_DIR="$PROJECT_ROOT/logs"
-AGENTS=(com.artjeck.ifta-web com.artjeck.ifta-worker)
+AGENTS=(com.artjeck.ifta-web com.artjeck.ifta-worker com.artjeck.ifta-backup)
 
 ACTION="${1:-install}"
 
@@ -83,6 +83,7 @@ echo ""
 echo "Tail logs with:"
 echo "  tail -f $LOGS_DIR/web.{out,err}.log"
 echo "  tail -f $LOGS_DIR/worker.{out,err}.log"
+echo "  tail -f $LOGS_DIR/backup.{out,err}.log   # nightly data snapshot (03:30)"
 echo ""
 echo "Health check:"
 echo "  curl -s http://127.0.0.1:8000/healthz"
