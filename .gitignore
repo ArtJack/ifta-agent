@@ -43,6 +43,7 @@ data/telegram_access.json
 data/web_jobs.db
 data/web_jobs.db-*
 data/web_submissions/
+data/traces/
 
 # Receipt eval data — PII (real receipts + labels). Keep the harness + READMEs.
 evals/receipts/*
