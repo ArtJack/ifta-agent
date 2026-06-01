@@ -74,6 +74,13 @@ def test_process_submission_produces_packet(
     truck_files = list(trucks_dir.glob("*.xlsx"))
     assert truck_files, "expected at least one per-truck Excel"
 
+    # BUG-002: the .md (operator) and .pdf (customer) summaries must coexist —
+    # they shared a filename, so the PDF write used to clobber the markdown.
+    md_summary = out_dir / "summary_report.md"
+    pdf_summary = out_dir / "summary_report.pdf"
+    assert md_summary.exists() and md_summary.stat().st_size > 0
+    assert pdf_summary.exists() and pdf_summary.stat().st_size > 0
+
 
 def test_process_submission_missing_inbox_raises(tmp_path: Path) -> None:
     sub = _make_submission("nope")
