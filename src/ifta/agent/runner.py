@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from ifta.agent.metrics import AgentMetrics
 from ifta.agent.prompts import REVIEW_PROMPT_TEMPLATE, SYSTEM_PROMPT
 from ifta.agent.tools import ALL_TOOLS
+from ifta.agent.tracing import current_trace
 from ifta.client import load_client_context, quarter_key
 from ifta.review_packet import build_review_packet
 
@@ -204,9 +205,12 @@ def run_agent(
 
     final_text_parts: list[str] = []
     final_message = None
+    trace = current_trace()
     for message in runner:
         final_message = message
         metrics.add_usage(getattr(message, "usage", None))
+        if trace is not None:
+            trace.record_turn(message)
         for block in message.content:
             if block.type == "text":
                 final_text_parts.append(block.text)
