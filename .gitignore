@@ -47,7 +47,7 @@ data/web_submissions/
 # Receipt eval data — PII (real receipts + labels). Keep the harness + READMEs.
 evals/receipts/*
 !evals/receipts/README.md
-evals/receipt_labels.json
+evals/receipt_labels*.json
 evals/predictions/
 evals/receipt_eval_report_*.md
 
