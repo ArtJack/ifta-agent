@@ -152,6 +152,34 @@ def test_mark_done_clears_error(db_path: Path) -> None:
     assert fetched.error is None
 
 
+def test_mark_done_rejects_pending_approval(db_path: Path) -> None:
+    # BUG-007: a job awaiting operator approval must not jump straight to DONE.
+    db.create_submission(
+        db_path,
+        submission_id="pa",
+        email="customer@example.com",
+        quarter="Q1-2026",
+        confirm_token="tok-pa",
+        status=SubmissionStatus.PENDING_APPROVAL,
+    )
+    db.mark_done(db_path, "pa")
+    fetched = db.get_submission(db_path, "pa")
+    assert fetched is not None
+    assert fetched.status == SubmissionStatus.PENDING_APPROVAL  # unchanged
+
+
+def test_mark_failed_rejects_done_to_failed(db_path: Path) -> None:
+    # BUG-007: a completed job must not be re-marked failed.
+    _create_queued(db_path, "fin")
+    db.claim_next_queued(db_path)  # -> RUNNING
+    db.mark_done(db_path, "fin")  # -> DONE
+    db.mark_failed(db_path, "fin", error="too late")
+    fetched = db.get_submission(db_path, "fin")
+    assert fetched is not None
+    assert fetched.status == SubmissionStatus.DONE  # unchanged
+    assert fetched.error is None  # not overwritten
+
+
 def test_reap_stale_running_flips_to_failed(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
