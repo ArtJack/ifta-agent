@@ -1273,13 +1273,15 @@ def eval_cmd(cases_dir: Path | None, case_filter: str | None, verbose: bool) -> 
         else:
             total_fail += 1
 
+        if result.tool_sequence:
+            console.print(f"  [dim]trajectory: {' → '.join(result.tool_sequence)}[/]")
         if result.metrics is not None:
             total_cost += result.metrics.estimated_cost_usd
             total_time += result.metrics.wall_time_seconds
             console.print(
                 f"  [dim]cost=${result.metrics.estimated_cost_usd:.4f}  "
                 f"time={result.metrics.wall_time_seconds:.1f}s  "
-                f"tools={result.metrics.n_model_calls} calls[/]"
+                f"model_calls={result.metrics.n_model_calls}[/]"
             )
 
         if verbose or not result.passed:
