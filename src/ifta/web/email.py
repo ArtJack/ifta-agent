@@ -100,11 +100,13 @@ class EmailClient:
         files = sorted(_collect_customer_attachments(out_dir))
         body = _read_customer_note(out_dir)
         text = _packet_text(sub, body)
+        html = _read_customer_html(out_dir) or None
         attachments = [_to_attachment(p) for p in files]
         return self._send(
             to=sub.email,
             subject=f"Your {sub.quarter} IFTA packet",
             text=text,
+            html=html,
             attachments=attachments,
         )
 
@@ -200,6 +202,7 @@ class EmailClient:
         to: str,
         subject: str,
         text: str,
+        html: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> bool:
         params: dict[str, Any] = {
@@ -208,6 +211,8 @@ class EmailClient:
             "subject": subject,
             "text": text,
         }
+        if html:
+            params["html"] = html
         if attachments:
             params["attachments"] = attachments
         if self.config.admin_bcc:
@@ -301,6 +306,15 @@ def _read_customer_note(out_dir: Path) -> str:
     return candidates[0].read_text(encoding="utf-8")
 
 
+def _read_customer_html(out_dir: Path) -> str:
+    """Read the styled HTML email body, if the pipeline produced one. Returns
+    '' for older submissions (pre-HTML) so the email falls back to text-only."""
+    candidates = list(out_dir.rglob("customer_note.html"))
+    if not candidates:
+        return ""
+    return candidates[0].read_text(encoding="utf-8")
+
+
 def _confirmation_text(sub: Submission, confirm_url: str) -> str:
     company_line = f" for {sub.company}" if sub.company else ""
     return (
@@ -336,8 +350,9 @@ def _packet_text(sub: Submission, customer_note: str) -> str:
         f"{greeting}\n\n"
         f"Your {sub.quarter} IFTA packet{company_line} is attached.\n\n"
         f"• ifta_portal.csv — upload this directly to your state's IFTA portal\n"
-        f"• trucks/<id>.xlsx — per-truck breakdown\n\n"
-        f"Questions? Just reply — Eugene reads every email.\n\n"
+        f"• summary_report.pdf — full plain-English breakdown for your records\n"
+        f"• one Excel per truck — per-truck breakdown\n\n"
+        f"Questions? Just reply — we read every email.\n\n"
         f"— ArtJeck IFTA\n"
     )
 

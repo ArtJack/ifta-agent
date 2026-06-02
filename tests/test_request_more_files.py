@@ -206,7 +206,7 @@ def test_more_files_body_falls_back_when_brief_is_empty_or_opaque() -> None:
     """If the brief doesn't carry `[SEVERITY] CODE: ...` bullets the renderer
     emits a generic friendly line rather than dumping raw text."""
     body = render_more_files_request(sub=_sub(), intake_brief="")
-    assert "Eugene will follow up" in body
+    assert "we'll follow up" in body
     body2 = render_more_files_request(sub=_sub(), intake_brief="Internal error: KeyError 'state'")
     assert "KeyError" not in body2
 

@@ -117,6 +117,10 @@ def test_send_packet_attaches_only_customer_facing_files(
         "Total tax due: $123.45\n",
         encoding="utf-8",
     )
+    (out_dir / "customer_note.html").write_text(
+        "<!DOCTYPE html><html><body>Looks ready to file. truck_800.xlsx</body></html>",
+        encoding="utf-8",
+    )
     (out_dir / "summary_report.md").write_text(
         "# IFTA Q1-2026 Summary Report\n\n## Status: Ready to file\n", encoding="utf-8"
     )
@@ -136,12 +140,17 @@ def test_send_packet_attaches_only_customer_facing_files(
     assert "review_note.md" not in filenames
     assert "findings.json" not in filenames
     assert "customer_note.md" not in filenames
+    assert "customer_note.html" not in filenames  # the body, not an attachment
     # Each attachment carries the actual bytes.
     portal_att = next(a for a in params["attachments"] if a["filename"] == "ifta_portal.csv")
     assert bytes(portal_att["content"]) == b"state,miles\nKY,100\n"
     # Email body uses the friendly customer note, not the dev review note.
     assert "Looks ready to file" in params["text"]
     assert "**$123.45**" not in params["text"]  # no markdown bold leakage
+    # The styled HTML part is included so desktop clients render it cleanly.
+    assert "html" in params
+    assert "<!DOCTYPE html>" in params["html"]
+    assert "Looks ready to file" in params["html"]
 
 
 def test_send_packet_handles_missing_out_dir(captured_sends: list[dict[str, Any]]) -> None:
