@@ -45,6 +45,11 @@ data/web_jobs.db-*
 data/web_submissions/
 data/traces/
 
+# Client source data is PII (real client inputs, profiles, filing history).
+# test_logistics is synthetic and stays tracked; real clients are never committed.
+data/clients/*/
+!data/clients/test_logistics/
+
 # Receipt eval data — PII (real receipts + labels). Keep the harness + READMEs.
 evals/receipts/*
 !evals/receipts/README.md
