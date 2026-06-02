@@ -118,6 +118,28 @@ write-ups carry methodology and aggregate numbers only.
 - Penny-accurate against historical filings (regression-tested).
 - Model cost per reviewed filing: **~$0.10** (real runs ranged $0.08–$0.13, by model + effort).
 
+## Scales to large fleets
+
+The review is bounded by **findings, not fleet size** — the agent reviews the aggregate
+return plus the exception trucks (outliers, missing data, MPG anomalies), not one write-up
+per truck. Measured at production settings:
+
+| Fleet | Review time | Output | Cost | Findings |
+|---|--:|--:|--:|--:|
+| 1 truck (real) | ~2.4 min | 7.4k tok | ~$0.15 | — |
+| 5–6 trucks (real — DM Express) | ~2.0 min | 6.5k tok | ~$0.19 | 15 |
+| **100 trucks (synthetic load test)** | **~1.8 min** | 5.4k tok | ~$0.22 | 16 |
+
+A 100-truck fleet reviewed *faster* than five — because trucks don't drive the cost, the
+**number of anomalies does**, and the per-state return caps at ~48 jurisdictions regardless
+of fleet size. The deterministic per-truck Excel still covers every truck; the AI spends its
+attention on the material exceptions, like a good auditor. Reproducible via
+`scripts/load_test_fleet.py`.
+
+> Measuring this also flushed out a real bug: a multi-truck review's *thinking + JSON* had
+> been overflowing the token budget and silently truncating to a deterministic-only packet —
+> caught by **measuring at scale, not guessing**, and fixed before it ever hit a real fleet.
+
 ## What's next
 
 Hosted vector DB for the rule base; surfacing the **benchmark history publicly** as a live eval
