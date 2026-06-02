@@ -10,7 +10,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -262,6 +262,7 @@ def review(
     inbox_dir: Path | None = None,
     output_dir: Path | None = None,
     client_name: str | None = None,
+    base_state: str | None = None,
 ) -> tuple[ReviewNote, AgentMetrics]:
     """Produce a structured pre-filing review for one quarter.
 
@@ -274,7 +275,9 @@ def review(
     `data/web_submissions/<sid>/`) rather than at the standard
     `inbox/<client>/<quarter>/` paths. `client_name` is shown to the agent
     so it has something more useful than "Anonymous web submission" when
-    the customer provided their carrier name.
+    the customer provided their carrier name. `base_state` is the customer's
+    IFTA base jurisdiction from the intake form, so the agent doesn't flag it
+    as "unknown" when the customer already told us.
     """
     from ifta.agent import context as agent_context
 
@@ -296,14 +299,22 @@ def review(
 
     try:
         if override_token is not None:
+            base = (base_state or "").upper() or None
             client_context_dict = {
                 "client_id": None,
                 "client_name": client_name or "Anonymous web submission",
+                "base_jurisdiction": base,
                 "source": "web",
                 "notes": (
                     "First-time anonymous web submission. No historical "
                     "filings or carrier profile available — review the "
                     "current quarter on its own merits."
+                    + (
+                        f" Customer provided their IFTA base jurisdiction as "
+                        f"{base}; treat that as the filing base state."
+                        if base
+                        else " Customer did not provide a base jurisdiction."
+                    )
                 ),
             }
         else:
@@ -333,6 +344,13 @@ def _run_review_with_retry(
     from ifta.agent.tools import _load_quarter_full
 
     data, _, ret, findings, client_context = _load_quarter_full(quarter, client_context_dict.get("client_id"))
+    # Anonymous web submissions load an empty context (base_jurisdiction=None),
+    # but the customer may have given their base state on the intake form
+    # (carried in client_context_dict). Fold it into the packet so the agent
+    # doesn't flag a base jurisdiction the customer already provided.
+    ctx_base = client_context_dict.get("base_jurisdiction")
+    if ctx_base and not client_context.base_jurisdiction:
+        client_context = replace(client_context, base_jurisdiction=ctx_base)
     review_packet = build_review_packet(data, ret, findings, client_context)
     prompt = REVIEW_PROMPT_TEMPLATE.format(
         quarter=quarter,
