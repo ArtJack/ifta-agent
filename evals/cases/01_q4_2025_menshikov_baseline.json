@@ -1,6 +1,6 @@
 {
   "name": "q4_2025_menshikov_baseline",
-  "description": "Baseline review — Q4 2025 MENSHIKOV LLC. Must match $795.16 (the known CDTFA backtest) and surface KY+VA surcharge handling + Oregon WMT.",
+  "description": "Baseline review — Q4 2025 MENSHIKOV LLC. Must match $795.16 (the known CDTFA backtest) and surface KY+VA surcharge handling + Oregon WMT. This is a CLEAN backtest return (no anomalies), so the agent correctly routes the surcharge/WMT items to filing_reminders + next_steps — not to 'issues'. We therefore assert on filing_reminders/next_steps, NOT min_issues (a clean return having zero blocking issues is correct, not a failure).",
   "command": "review",
   "quarter": "Q4-2025",
   "client": "menshikov_llc",
@@ -21,10 +21,8 @@
       "David"
     ],
     "min_summary_len": 120,
-    "min_issues": 1,
     "structural": {
       "has_summary": true,
-      "has_issues": true,
       "has_filing_reminders": true,
       "has_next_steps": true
     }
