@@ -9,6 +9,7 @@ from ifta.eval.runner import (
     CaseResult,
     EvalCase,
     grade_assertions,
+    grade_trajectory,
     load_cases,
     run_case,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "CaseResult",
     "EvalCase",
     "grade_assertions",
+    "grade_trajectory",
     "load_cases",
     "run_case",
 ]

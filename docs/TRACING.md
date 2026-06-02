@@ -37,6 +37,7 @@ is **git-ignored**. The tracing code and tests are PII-free.
 
 ## Next
 
-- A `tool_sequence` span-evaluator (expected vs actual trajectory) wired into `ifta benchmark`.
+- ✅ **Span / trajectory evaluator** — a case's `tools` block in `ifta eval` grades the
+  agent's tool sequence (must_call / must_not_call / order / budget) against the trace.
 - Capture tool *outputs* (wrap the tool functions) for full step-level inspection.
 - A rubric + validated LLM judge over the trace for qualitative review quality.
