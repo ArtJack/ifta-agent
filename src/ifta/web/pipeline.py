@@ -25,11 +25,13 @@ from ifta.report import write_per_truck_filings, write_portal_csv
 from ifta.validator import Finding, format_findings, validate
 from ifta.web.customer_view import (
     CUSTOMER_NOTE_FILENAME,
+    CUSTOMER_NOTE_HTML_FILENAME,
     CUSTOMER_SUMMARY_FILENAME,
     CUSTOMER_SUMMARY_PDF_FILENAME,
     render_customer_summary,
     render_customer_summary_pdf,
     render_customer_view,
+    render_customer_view_html,
 )
 from ifta.web.models import Submission
 
@@ -108,26 +110,35 @@ def process_submission(
         ret=ret,
     )
     write_findings_json(out_dir / FINDINGS_FILENAME, report=report, findings=findings)
-    # Customer-facing output, two layers:
-    #   - customer_note.md   → short email body (phone-readable)
+    # Customer-facing output, three layers:
+    #   - customer_note.md   → short email body (phone-readable, plain-text part)
+    #   - customer_note.html → same body, styled HTML part of the email
     #   - summary_report.md  → detailed plain-English report, attached for
     #                          the customer/accountant's records
     # review_note.md and findings.json stay operator/audit-only.
     truck_count = len({m.truck_id for m in data.miles} | {f.truck_id for f in data.fuel})
-    (out_dir / CUSTOMER_NOTE_FILENAME).write_text(
-        render_customer_view(
-            sub=sub, ret=ret, note=note, findings=findings, truck_count=truck_count
-        ),
-        encoding="utf-8",
+    # Real attachment filenames the customer will see (flat — email attachments
+    # have no folders), so the note lists e.g. 'truck_55.xlsx', never '<id>'.
+    truck_xlsxs = (
+        sorted(p.name for p in (out_dir / "trucks").glob("*.xlsx"))
+        if (out_dir / "trucks").exists()
+        else []
     )
-    truck_xlsxs = sorted(p.name for p in (out_dir / "trucks").glob("*.xlsx")) if (out_dir / "trucks").exists() else []
-    # The PDF is what the customer actually receives. We still write the .md
-    # alongside as a debug/operator artifact (cheaper to diff than a PDF).
-    attached_files = [
-        "ifta_portal.csv",
-        *(f"trucks/{n}" for n in truck_xlsxs),
-        CUSTOMER_SUMMARY_PDF_FILENAME,
-    ]
+    attached_files = ["ifta_portal.csv", *truck_xlsxs, CUSTOMER_SUMMARY_PDF_FILENAME]
+    view_kwargs = {
+        "sub": sub,
+        "ret": ret,
+        "note": note,
+        "findings": findings,
+        "truck_count": truck_count,
+        "attached_files": attached_files,
+    }
+    (out_dir / CUSTOMER_NOTE_FILENAME).write_text(
+        render_customer_view(**view_kwargs), encoding="utf-8"
+    )
+    (out_dir / CUSTOMER_NOTE_HTML_FILENAME).write_text(
+        render_customer_view_html(**view_kwargs), encoding="utf-8"
+    )
     (out_dir / CUSTOMER_SUMMARY_FILENAME).write_text(
         render_customer_summary(
             sub=sub,
@@ -230,6 +241,16 @@ def _write_review_note(
                 sub.id,
                 e,
             )
+    elif not _agent_disabled():
+        # Key absent (vs. the intentional IFTA_WEB_SKIP_AGENT kill switch) —
+        # log loudly so a stale worker that started before ANTHROPIC_API_KEY was
+        # added to .env doesn't silently ship deterministic-only packets.
+        log.warning(
+            "ANTHROPIC_API_KEY not in environment — AI review SKIPPED for "
+            "submission %s (packet ships deterministic-only). Set the key in "
+            ".env and restart the worker.",
+            sub.id,
+        )
     _write_findings_note(path, findings, ret)
     return None
 

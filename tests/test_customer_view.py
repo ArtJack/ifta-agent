@@ -19,6 +19,7 @@ from ifta.web.customer_view import (
     render_customer_summary,
     render_customer_summary_pdf,
     render_customer_view,
+    render_customer_view_html,
 )
 from ifta.web.models import Submission, SubmissionStatus
 
@@ -59,7 +60,13 @@ def _ret(
 
 def test_renders_minimal_ready_to_file() -> None:
     note = SimpleNamespace(filing_status="READY_TO_FILE", issues=[], next_steps=[])
-    body = render_customer_view(sub=_sub(), ret=_ret(), note=note, truck_count=1)
+    body = render_customer_view(
+        sub=_sub(),
+        ret=_ret(),
+        note=note,
+        truck_count=1,
+        attached_files=["ifta_portal.csv", "truck_55.xlsx", "summary_report.pdf"],
+    )
     assert body.startswith("Hi Pat,\n")
     assert "Q1-2026 IFTA packet is ready" in body
     assert "Looks ready to file." in body
@@ -67,8 +74,10 @@ def test_renders_minimal_ready_to_file() -> None:
     assert "Fleet MPG: 6.67" in body
     assert "Before you file" not in body  # no warnings → no checklist
     assert "ifta_portal.csv" in body
-    assert "trucks/<id>.xlsx" in body
-    assert "Eugene" in body  # sign-off
+    assert "truck_55.xlsx" in body  # the real filename, never a placeholder
+    assert "<id>" not in body  # BUG A regression guard
+    assert "we read every email" in body  # depersonalized sign-off
+    assert "Eugene" not in body
 
 
 def test_anonymous_greeting_when_no_name() -> None:
@@ -81,6 +90,26 @@ def test_multi_truck_attachment_phrasing() -> None:
     note = SimpleNamespace(filing_status="READY_TO_FILE", issues=[], next_steps=[])
     body = render_customer_view(sub=_sub(), ret=_ret(), note=note, truck_count=5)
     assert "(5 trucks)" in body
+
+
+def test_html_body_mirrors_text_and_escapes() -> None:
+    note = SimpleNamespace(filing_status="READY_TO_FILE", issues=[], next_steps=[])
+    html = render_customer_view_html(
+        sub=_sub(name="A & B <Co>"),
+        ret=_ret(),
+        note=note,
+        truck_count=1,
+        attached_files=["ifta_portal.csv", "truck_55.xlsx", "summary_report.pdf"],
+    )
+    assert html.startswith("<!DOCTYPE html>")
+    assert "Total tax due" in html and "$15.75" in html
+    assert "truck_55.xlsx" in html  # real filename
+    assert "<id>" not in html
+    assert "we read every email" in html
+    assert "Eugene" not in html
+    # customer-supplied name is HTML-escaped, never injected as raw markup
+    assert "A &amp; B &lt;Co&gt;" in html
+    assert "<Co>" not in html
 
 
 # ─── warning rendering / dev-markup stripping ────────────────────────────────
