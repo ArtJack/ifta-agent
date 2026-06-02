@@ -287,6 +287,7 @@ def _write_agent_review(
         inbox_dir=inbox,
         output_dir=out_dir,
         client_name=sub.company or "Anonymous web submission",
+        base_state=sub.base_state,
     )
     written = write_review_md(note, path, metrics=metrics)
     log.info(
