@@ -47,10 +47,20 @@ One JSON file per case under `cases/`. Schema:
       "has_issues": true,
       "has_filing_reminders": true,
       "has_next_steps": true
+    },
+    "tools": {                      // trajectory — graded against the agent's trace
+      "must_call": ["query_return"],
+      "must_not_call": ["read_past_filing"],
+      "must_call_in_order": ["get_review_packet", "lookup_rate"],
+      "max_calls": 12
     }
   }
 }
 ```
+
+The `tools` block is a **span / trajectory** assertion: it grades *which tools the
+agent actually called* (captured via the agent trace), not just its text output.
+`ifta eval` prints each case's `trajectory:` line so you can see the real sequence.
 
 ## What's in the starter set
 
@@ -69,6 +79,6 @@ Each case is one agent invocation. With `effort: low` and `claude-opus-4-7` the 
 ## Adding a case
 
 1. Drop a new `NN_<id>.json` in `cases/`.
-2. Run `ifta eval --case <id>` to see the agent's actual response.
-3. Set assertions narrowly — each assertion is one regression guardrail, not a complete behavioral spec.
+2. Run `ifta eval --case <id>` to see the agent's actual response **and its `trajectory:` line** (the tools it called).
+3. Set assertions narrowly — each assertion is one regression guardrail, not a complete behavioral spec. For a `tools` block, assert the trajectory you *observed* (the `trajectory:` line, or `ifta review … --trace`) — don't guess it.
 4. If a customer ever says "the agent missed X this quarter," add an assertion that catches it. That's how the suite earns its keep over time.
