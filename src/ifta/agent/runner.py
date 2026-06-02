@@ -29,7 +29,14 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_EFFORT = "medium"
-DEFAULT_MAX_TOKENS = {"review": 4096, "ask": 2048, "chat": 4096}
+# review must fit ADAPTIVE thinking + the full JSON in ONE budget. A multi-truck
+# fleet review (many findings) at medium effort blew past 4096 — thinking ate the
+# budget and the JSON truncated mid-output, failing the parse and silently
+# dropping the AI review to a deterministic-only fallback. A clean 5-6 truck fleet
+# already emits ~6.5k output tokens; 12288 leaves headroom for messier data (more
+# missing-receipt / anomaly findings). max_tokens is a ceiling, not a target —
+# adaptive thinking still emits only what the task needs, so the extra room is free.
+DEFAULT_MAX_TOKENS = {"review": 12288, "ask": 2048, "chat": 4096}
 
 
 # ---------------------------------------------------------------------------
