@@ -238,6 +238,12 @@ EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "max"]
     is_flag=True,
     help="Capture + save a trace of the agent's steps (tools, turns, tokens).",
 )
+@click.option(
+    "--judge",
+    "judge_on",
+    is_flag=True,
+    help="Score the note's quality with the LLM rubric judge (advisory, not a filing gate).",
+)
 def review(
     quarter: str,
     client: str | None,
@@ -245,6 +251,7 @@ def review(
     max_tokens: int,
     effort: str,
     trace_on: bool,
+    judge_on: bool,
 ) -> None:
     """Pre-filing review: agent verifies the return before you upload to the gov portal."""
     from ifta.agent import (
@@ -304,6 +311,25 @@ def review(
             console.print(f"\n[bold]{section}:[/]")
             for x in items:
                 console.print(f"  • {format_review_item(x, checkbox=section == 'Next steps')}")
+
+    if judge_on:
+        from ifta.eval.judge import judge_review, render_judge
+
+        console.print("")
+        console.rule("Quality judge")
+        try:
+            result = judge_review(
+                Path(path).read_text(encoding="utf-8"),
+                filing_status=note.filing_status,
+                filing_reasons=list(note.filing_status_reasons),
+            )
+            console.print(render_judge(result))
+            console.print(
+                "[dim]Scores the note's quality, not the filing decision. Validate the judge "
+                "against human scores before trusting it — see docs/JUDGE.md.[/]"
+            )
+        except Exception as e:  # judge is advisory — never fail a review on it
+            console.print(f"[yellow]judge unavailable: {e}[/]")
 
 
 @main.command()
