@@ -27,12 +27,20 @@ A case is a JSON document of this shape:
           "has_issues": true,
           "has_filing_reminders": true,
           "has_next_steps": true
+        },
+        "tools": {                  // trajectory — graded against the agent's trace
+          "must_call": ["query_return"],
+          "must_not_call": ["read_past_filing"],
+          "must_call_in_order": ["get_review_packet", "lookup_rate"],
+          "max_calls": 12
         }
       }
     }
 
 Keep cases small and assertions focused — each assertion is one regression
-guardrail, not a complete behavioral spec.
+guardrail, not a complete behavioral spec. Write `tools` assertions *after*
+observing a real run (`ifta review --trace`, or the `trajectory:` line in
+`ifta eval`) so you assert the path the agent actually takes.
 """
 
 from __future__ import annotations
@@ -123,6 +131,7 @@ class CaseResult:
     metrics: AgentMetrics | None
     assertions: list[AssertionResult]
     error: str | None = None
+    tool_sequence: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -246,39 +255,86 @@ def grade_assertions(
 
 
 # ---------------------------------------------------------------------------
+# Trajectory (span) grading
+# ---------------------------------------------------------------------------
+
+
+def _is_subsequence(needles: list[str], haystack: list[str]) -> bool:
+    it = iter(haystack)
+    return all(n in it for n in needles)
+
+
+def grade_trajectory(tools_spec: dict[str, Any], tool_sequence: list[str]) -> list[AssertionResult]:
+    """Grade the agent's tool-call trajectory against a case's `tools` assertions."""
+    results: list[AssertionResult] = []
+    called = set(tool_sequence)
+    for tool in tools_spec.get("must_call") or []:
+        ok = tool in called
+        results.append(AssertionResult(f"must_call[{tool}]", ok, "" if ok else "tool was not called"))
+    for tool in tools_spec.get("must_not_call") or []:
+        ok = tool not in called
+        results.append(
+            AssertionResult(f"must_not_call[{tool}]", ok, "" if ok else "forbidden tool was called")
+        )
+    order = tools_spec.get("must_call_in_order")
+    if order:
+        ok = _is_subsequence(list(order), tool_sequence)
+        results.append(
+            AssertionResult(f"must_call_in_order{list(order)}", ok, "" if ok else f"actual: {tool_sequence}")
+        )
+    max_calls = tools_spec.get("max_calls")
+    if max_calls is not None:
+        ok = len(tool_sequence) <= max_calls
+        results.append(
+            AssertionResult(f"max_calls<={max_calls}", ok, "" if ok else f"made {len(tool_sequence)} calls")
+        )
+    min_calls = tools_spec.get("min_calls")
+    if min_calls is not None:
+        ok = len(tool_sequence) >= min_calls
+        results.append(
+            AssertionResult(f"min_calls>={min_calls}", ok, "" if ok else f"made only {len(tool_sequence)} calls")
+        )
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
 
 
 def run_case(case: EvalCase) -> CaseResult:
     """Execute one eval case end-to-end. Catches exceptions so a broken case
-    doesn't stop the rest of the suite."""
+    doesn't stop the rest of the suite. The agent run is traced so the case's
+    `tools` assertions can grade the tool-call trajectory."""
+    from ifta.agent.tracing import traced
+
     started = time.monotonic()
     try:
-        if case.command == "review":
-            note, metrics = review(
-                case.quarter,
-                client=case.client,
-                model=case.model,
-                max_tokens=case.max_tokens,
-                effort=case.effort,
-            )
-            response_text = _serialize_review(note)
-        elif case.command == "ask":
-            if not case.question:
-                raise ValueError(f"case {case.name!r}: command=ask requires a 'question' field")
-            response_text = ask(
-                case.question,
-                quarter=case.quarter,
-                client=case.client,
-                model=case.model,
-                max_tokens=case.max_tokens,
-                effort=case.effort,
-            )
-            note = None
-            metrics = None  # ask() doesn't return metrics today
-        else:
-            raise ValueError(f"case {case.name!r}: unknown command {case.command!r}")
+        with traced(case.name, case.model) as trace:
+            if case.command == "review":
+                note, metrics = review(
+                    case.quarter,
+                    client=case.client,
+                    model=case.model,
+                    max_tokens=case.max_tokens,
+                    effort=case.effort,
+                )
+                response_text = _serialize_review(note)
+            elif case.command == "ask":
+                if not case.question:
+                    raise ValueError(f"case {case.name!r}: command=ask requires a 'question' field")
+                response_text = ask(
+                    case.question,
+                    quarter=case.quarter,
+                    client=case.client,
+                    model=case.model,
+                    max_tokens=case.max_tokens,
+                    effort=case.effort,
+                )
+                note = None
+                metrics = None  # ask() doesn't return metrics today
+            else:
+                raise ValueError(f"case {case.name!r}: unknown command {case.command!r}")
     except Exception as e:
         return CaseResult(
             case=case,
@@ -289,11 +345,12 @@ def run_case(case: EvalCase) -> CaseResult:
             error=f"{type(e).__name__}: {e}",
         )
 
-    assertions = grade_assertions(
-        case.assertions, response_text=response_text, note=note
-    )
+    tool_sequence = trace.tool_sequence()
+    assertions = grade_assertions(case.assertions, response_text=response_text, note=note)
+    tools_spec = case.assertions.get("tools")
+    if tools_spec:
+        assertions += grade_trajectory(tools_spec, tool_sequence)
     if metrics is not None:
-        # Stamp wall time including any local overhead.
         metrics.wall_time_seconds = round(time.monotonic() - started, 2)
     return CaseResult(
         case=case,
@@ -301,6 +358,7 @@ def run_case(case: EvalCase) -> CaseResult:
         note=note,
         metrics=metrics,
         assertions=assertions,
+        tool_sequence=tool_sequence,
     )
 
 
