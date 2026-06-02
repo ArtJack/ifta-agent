@@ -37,6 +37,7 @@ from ifta.validator import Finding
 from ifta.web.models import Submission
 
 CUSTOMER_NOTE_FILENAME = "customer_note.md"
+CUSTOMER_NOTE_HTML_FILENAME = "customer_note.html"
 CUSTOMER_SUMMARY_FILENAME = "summary_report.md"
 CUSTOMER_SUMMARY_PDF_FILENAME = "summary_report.pdf"
 
@@ -58,6 +59,56 @@ class _Action:
         return re.sub(r"\s+", " ", self.text.lower()).strip()
 
 
+# Human descriptions for the customer-facing attachment list. Per-truck Excel
+# files are named at runtime (truck_55.xlsx, …) so they're matched by suffix.
+_ATTACHMENT_DESCRIPTIONS = {
+    "ifta_portal.csv": "upload this directly to your state's IFTA portal",
+    "summary_report.pdf": "full plain-English breakdown for your records",
+}
+
+
+def _describe_attachment(name: str) -> str:
+    desc = _ATTACHMENT_DESCRIPTIONS.get(name)
+    if desc:
+        return desc
+    if name.endswith(".xlsx"):
+        return "per-truck breakdown"
+    return ""
+
+
+def _attachment_pairs(
+    attached_files: list[str] | None, truck_count: int
+) -> list[tuple[str, str]]:
+    """(name, description) rows for the packet's attachment list.
+
+    `attached_files` carries the REAL customer-facing filenames (e.g.
+    'truck_55.xlsx') so the email never shows a '<id>' placeholder. Falls back
+    to a generic list when the caller didn't pass names (older code paths).
+    """
+    if attached_files:
+        names = list(dict.fromkeys(attached_files))
+        return [(n, _describe_attachment(n)) for n in names]
+    pairs = [
+        ("ifta_portal.csv", _ATTACHMENT_DESCRIPTIONS["ifta_portal.csv"]),
+        ("summary_report.pdf", _ATTACHMENT_DESCRIPTIONS["summary_report.pdf"]),
+    ]
+    if truck_count:
+        suffix = f" ({truck_count} trucks)" if truck_count > 1 else ""
+        pairs.append((f"per-truck breakdown{suffix} (Excel)", ""))
+    return pairs
+
+
+def _html_escape(text: object) -> str:
+    """Escape text for inlining into the HTML email body."""
+    return (
+        str(text if text is not None else "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def render_customer_view(
     *,
     sub: Submission,
@@ -65,12 +116,14 @@ def render_customer_view(
     note: Any | None = None,
     findings: list[Finding] | None = None,
     truck_count: int = 0,
+    attached_files: list[str] | None = None,
 ) -> str:
     """Render the friendly customer-facing email body for a finished packet.
 
     Pass `note` (the agent's ReviewNote) when available; otherwise pass
     `findings` (the deterministic validator output). Both are optional — with
-    neither, we still produce a minimal status email.
+    neither, we still produce a minimal status email. `attached_files` carries
+    the real attachment filenames so the list shows e.g. 'truck_55.xlsx'.
     """
     greeting = f"Hi {sub.name}," if sub.name else "Hi,"
     status_blurb = _status_blurb(note)
@@ -95,20 +148,80 @@ def render_customer_view(
         lines.append("")
 
     lines.append("Attached:")
-    lines.append("• ifta_portal.csv — upload this directly to your state's IFTA portal")
-    lines.append("• summary_report.pdf — full plain-English breakdown for your records")
-    if truck_count:
-        if truck_count == 1:
-            lines.append("• trucks/<id>.xlsx — per-truck breakdown")
-        else:
-            lines.append(
-                f"• trucks/<id>.xlsx — per-truck breakdown ({truck_count} trucks)"
-            )
+    for name, desc in _attachment_pairs(attached_files, truck_count):
+        lines.append(f"• {name} — {desc}" if desc else f"• {name}")
     lines.append("")
-    lines.append("Questions? Just reply — Eugene reads every email.")
+    lines.append("Questions? Just reply — we read every email.")
     lines.append("")
     lines.append("— ArtJeck IFTA")
     return "\n".join(lines) + "\n"
+
+
+def render_customer_view_html(
+    *,
+    sub: Submission,
+    ret: IftaReturn,
+    note: Any | None = None,
+    findings: list[Finding] | None = None,
+    truck_count: int = 0,
+    attached_files: list[str] | None = None,
+) -> str:
+    """HTML version of the packet email body — same content as
+    `render_customer_view`, styled so it reads cleanly on desktop and mobile.
+
+    Sent as the email's `html` part alongside the plain-text body (clients that
+    can't render HTML fall back to the text). All interpolated values are
+    HTML-escaped.
+    """
+    esc = _html_escape
+    greeting = f"Hi {esc(sub.name)}," if sub.name else "Hi,"
+    actions = _collect_actions(note=note, findings=findings)
+
+    p: list[str] = [f'<p style="margin:0 0 16px">{greeting}</p>']
+    p.append(
+        f'<p style="margin:0 0 16px">Your <strong>{esc(sub.quarter)}</strong> IFTA '
+        f"packet is ready. {esc(_status_blurb(note))}</p>"
+    )
+    p.append(
+        '<table role="presentation" cellpadding="0" cellspacing="0" '
+        'style="border-collapse:collapse;margin:0 0 20px">'
+        '<tr><td style="padding:3px 16px 3px 0;color:#5b6b7c">Total tax due</td>'
+        f'<td style="padding:3px 0;font-weight:600">${ret.total_tax_due:,.2f}</td></tr>'
+        '<tr><td style="padding:3px 16px 3px 0;color:#5b6b7c">Fleet MPG</td>'
+        f'<td style="padding:3px 0;font-weight:600">{ret.fleet_mpg:.2f}</td></tr>'
+        "</table>"
+    )
+    if actions:
+        p.append('<p style="margin:0 0 8px;font-weight:600">Before you file, please double-check:</p>')
+        p.append('<ul style="margin:0 0 20px;padding-left:22px">')
+        p += [f'<li style="margin:0 0 6px">{esc(a.text)}</li>' for a in actions]
+        p.append("</ul>")
+    if ret.rate_warning:
+        p.append(
+            '<p style="margin:0 0 20px;padding:12px 14px;background:#fff4e5;'
+            f'border-radius:8px;color:#7a4a00">⚠️ Heads up: {esc(ret.rate_warning)}</p>'
+        )
+    p.append('<p style="margin:0 0 8px;font-weight:600">Attached:</p>')
+    p.append('<ul style="margin:0 0 20px;padding-left:22px">')
+    for name, desc in _attachment_pairs(attached_files, truck_count):
+        label = f'<code style="background:#f1f4f7;padding:1px 5px;border-radius:4px">{esc(name)}</code>'
+        p.append(f'<li style="margin:0 0 6px">{label}{(" — " + esc(desc)) if desc else ""}</li>')
+    p.append("</ul>")
+    p.append(
+        '<p style="margin:0 0 4px;color:#5b6b7c">Questions? Just reply — we read every email.</p>'
+    )
+    p.append('<p style="margin:16px 0 0;color:#5b6b7c">— ArtJeck IFTA</p>')
+
+    return (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"></head>'
+        '<body style="margin:0;background:#eef1f4;padding:24px 12px">'
+        '<div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;'
+        "padding:28px 30px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+        "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#16212e\">"
+        + "\n".join(p)
+        + "</div></body></html>"
+    )
 
 
 # ─── internals ────────────────────────────────────────────────────────────────
@@ -300,7 +413,7 @@ def render_customer_summary(
 
     lines.append("---")
     lines.append("")
-    lines.append("Questions? Reply to the email this report came with — Eugene reads every one.")
+    lines.append("Questions? Reply to the email this report came with — we read every one.")
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -448,7 +561,7 @@ def render_customer_failure(*, sub: Submission, error: str) -> str:
         lines.append("• Something on our end didn't quite work with the files you sent.")
     lines.append("")
     lines.append("What to do next:")
-    lines.append("• Reply to this email with the missing or corrected files — Eugene reads every one.")
+    lines.append("• Reply to this email with the missing or corrected files — we read every one.")
     lines.append("• Or re-upload at https://artjeck.com/ifta/submit")
     lines.append("")
     lines.append("Your files are safe on our end. We'll pick up the moment we hear back.")
@@ -492,7 +605,7 @@ def render_customer_failure_report(*, sub: Submission, error: str) -> str:
     else:
         lines.append(
             "Something on our end didn't quite work with the files you sent. "
-            "Reply to your packet email and Eugene will dig in."
+            "Reply to your packet email and we'll take it from there."
         )
         lines.append("")
 
@@ -511,7 +624,7 @@ def render_customer_failure_report(*, sub: Submission, error: str) -> str:
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append("Questions? Reply to the email this report came with — Eugene reads every one.")
+    lines.append("Questions? Reply to the email this report came with — we read every one.")
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -804,7 +917,7 @@ def _build_summary_flowables(
     flow.append(Spacer(1, 12))
     flow.append(
         Paragraph(
-            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            "Questions? Reply to the email this report came with — we read every one.",
             s["small"],
         )
     )
@@ -842,7 +955,7 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
         flow.append(
             Paragraph(
                 "Something on our end didn't quite work with the files you sent. "
-                "Reply to your packet email and Eugene will dig in.",
+                "Reply to your packet email and we'll take it from there.",
                 s["body"],
             )
         )
@@ -866,7 +979,7 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
     flow.append(Spacer(1, 12))
     flow.append(
         Paragraph(
-            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            "Questions? Reply to the email this report came with — we read every one.",
             s["small"],
         )
     )
@@ -909,7 +1022,7 @@ def render_more_files_request(
             lines.append(f"• {b}")
     else:
         lines.append(
-            "• A couple of additional records would help us finish — Eugene will "
+            "• A couple of additional records would help us finish — we'll "
             "follow up with specifics when you reply."
         )
     lines.append("")
@@ -923,7 +1036,7 @@ def render_more_files_request(
         )
     else:
         lines.append(
-            "• Reply to this email with the missing files attached — Eugene reads every one."
+            "• Reply to this email with the missing files attached — we read every one."
         )
         lines.append("• Or re-upload everything at https://artjeck.com/ifta/submit")
     lines.append("")
@@ -990,7 +1103,7 @@ def _build_more_files_flowables(
     else:
         flow.append(
             Paragraph(
-                "Eugene will follow up by email with specifics — reply to your "
+                "We'll follow up by email with specifics — reply to your "
                 "packet email and we'll take it from there.",
                 s["body"],
             )
@@ -1029,7 +1142,7 @@ def _build_more_files_flowables(
     flow.append(Spacer(1, 12))
     flow.append(
         Paragraph(
-            "Questions? Reply to the email this report came with — Eugene reads every one.",
+            "Questions? Reply to the email this report came with — we read every one.",
             s["small"],
         )
     )
