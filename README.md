@@ -1,8 +1,21 @@
-# IFTA Pipeline
+# IFTA Agent — quarterly fuel-tax filing pipeline with an LLM review agent
 
-Quarterly IFTA filing pipeline for trucking operators, with an
-LLM-powered review agent that knows IFTA regulations end-to-end and is
-trained on the user's own clients.
+**Status:** in production, filing every quarter for a real carrier (DM Express) ·
+**427 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
+
+> Carriers drop in their messy mileage + fuel-card exports; minutes later they get a
+> filing-ready IFTA packet that an LLM agent has reviewed against the regulations and their
+> own filing history.
+
+📄 **[Full case study](ifta-portfolio/CASE-STUDY.md)** · 📐 **[Requirements](docs/requirements.md)** · **[Design](docs/design.md)**
+
+### The core idea: math is deterministic, the LLM only reviews
+A deterministic pipeline (`ingest → calc → validate → report`) computes everything that lands on
+the tax form — fleet MPG, taxable gallons, per-jurisdiction tax + surcharge. An LLM agent
+(Anthropic SDK, **18 grounded tools**) then *reviews* that computed return against the rule base,
+live rates, and real filing history — it never computes a number, so a carrier can trust it for a
+government filing. Regression-tested to the penny; a layered eval harness gates the pipeline
+(see the [case study](ifta-portfolio/CASE-STUDY.md)).
 
 ## Workflow
 
@@ -165,48 +178,35 @@ If current-quarter rates are unavailable, the bot marks the packet as
 
 ## Project layout
 
+**44 Python modules · 16k LOC · 427 tests across 38 files.** Layered by responsibility:
+
 ```
-ifta_pipeline/
-├─ pyproject.toml          # package metadata, ruff + mypy + pytest config
-├─ README.md
-├─ .env                    # API key (gitignored)
-├─ .env.example
-├─ .vscode/                # editor settings + debug launch configs
-│  ├─ settings.json
-│  ├─ launch.json
-│  └─ extensions.json
-├─ src/ifta/
-│  ├─ __main__.py          # entry point
-│  ├─ cli.py               # Click CLI
-│  ├─ models.py            # dataclasses + jurisdiction sets
-│  ├─ ingest.py            # CSV/Excel/PDF parsers
-│  ├─ rates.py             # IFTA rate-matrix fetcher (iftach.org)
-│  ├─ calc.py              # fleet-MPG, taxable-gal, surcharge math
-│  ├─ validator.py         # rule-based pre-flight checks
-│  ├─ report.py            # Excel + portal-CSV writers
-│  └─ agent/
-│     ├─ __init__.py       # public API: review / ask / chat_loop
-│     ├─ prompts.py        # SYSTEM_PROMPT + REVIEW_PROMPT_TEMPLATE
-│     ├─ tools.py          # 14 @beta_tool functions the agent can call
-│     └─ runner.py         # SDK invocation, model kwargs, conversation loop
-├─ data/
-│  ├─ regulations.json     # IFTA knowledge base
-│  ├─ rates/<NQ20YY>.csv   # cached IFTA rate matrices
-│  ├─ david_history.json   # DM EXPRESS INC quarterly data (active client)
-│  ├─ david_profile.json
-│  ├─ my_truck_history.json   # MENSHIKOV LLC retired filings (reference)
-│  ├─ my_truck_profile.json
-│  └─ README.md
-├─ scripts/
-│  ├─ extract_david.py     # rebuilds david_*.json from David/ folder
-│  ├─ extract_my_truck.py  # rebuilds my_truck_*.json from MyTruck/ PDFs
-│  └─ README.md
-├─ inbox/<quarter>/        # drop raw files here
-├─ outputs/<quarter>/      # generated files land here
-└─ tests/
-   ├─ conftest.py
-   ├─ test_q1_2025.py      # historical accuracy check
-   └─ test_q4_2025_menshikov.py
+src/ifta/
+├─ cli.py                  # Click CLI: run | review | ask | chat | telegram-bot | rates
+├─ models.py               # canonical data model + jurisdiction sets
+│  ── deterministic pipeline (the math) ──
+├─ ingest.py               # CSV / Excel / PDF parsers
+├─ rates.py                # IFTA rate-matrix fetcher + cache (iftach.org)
+├─ calc.py                 # fleet-MPG, taxable gallons, surcharge math
+├─ validator.py + preflight.py   # rule-based pre-flight checks
+├─ report.py               # Excel + portal-CSV writers
+├─ agent/                  # ── LLM review layer (judgment) ──
+│  ├─ runner.py            # SDK invocation, model/effort kwargs, conversation loop
+│  ├─ tools.py             # 18 grounded tools the agent can call
+│  ├─ prompts.py           # system + review-prompt templates
+│  └─ context.py · metrics.py · tracing.py
+├─ intake/                 # extract · receipts (vision) · reconcile · report
+├─ eval/                   # runner · judge (validated LLM-as-judge with agreement gate)
+└─ web/                    # ── multi-tenant FastAPI service ──
+   ├─ app.py · db.py · pipeline.py · worker.py · customer_view.py
+   ├─ telegram_approval.py # operator approval gate
+   ├─ turnstile.py         # CAPTCHA   email.py  models.py  intake_brief.py
+
+docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · BENCHMARK · JUDGE · TRACING
+evals/       benchmark history, cases, receipt eval reports (PII receipts git-ignored)
+data/        regulations KB · cached rate matrices · per-client history (git-ignored)
+ifta-portfolio/CASE-STUDY.md
+tests/       38 files, 427 tests — incl. penny-accurate regression vs. real filings
 ```
 
 ## The AI agent (Phase 2)
