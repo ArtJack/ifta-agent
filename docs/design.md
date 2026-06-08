@@ -58,7 +58,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
 - **Integration** — full ingest→return pipeline; multi-tenant web flows.
 - **Regression** — assert fleet MPG/miles/total tax match real historical filings to the penny.
 - **Eval** — benchmark gate on extractor/agent accuracy vs. human-checked gold.
-- **427 tests** across 38 files.
+- **429 tests** across 38 files.
 
 ## 6. Risks & mitigations
 - *Rate-table staleness* → packet marked `REVIEW REQUIRED` if the quarter's rates are unavailable.

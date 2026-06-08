@@ -47,5 +47,5 @@ to put on a government tax form.
 
 ## 6. Acceptance criteria
 - Reproduces real historical filings to the penny (regression-tested). ✓
-- 400+ automated tests passing (currently **427**). ✓
+- 400+ automated tests passing (currently **429**). ✓
 - In production for at least one real recurring carrier. ✓ (DM Express)
