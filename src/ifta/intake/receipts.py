@@ -278,7 +278,13 @@ def _missing_required_fields(candidate: ReceiptCandidate) -> list[str]:
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
-    text = value.strip()
+    # Excel serial-date cells stringify as 'YYYY-MM-DD 00:00:00' (sometimes with
+    # a 'T' separator). Drop any trailing time component before matching the
+    # date-only formats — otherwise the parse fails, duplicate detection is
+    # skipped, and the receipt gets double-counted silently.
+    text = value.strip().split(" ")[0].split("T")[0]
+    if not text:
+        return None
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
         try:
             return datetime.strptime(text, fmt).date()

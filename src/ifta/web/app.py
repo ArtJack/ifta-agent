@@ -19,6 +19,7 @@ import re
 import secrets
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -56,6 +57,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf"}
 DEFAULT_MAX_FILE_MB = 10
+# A single submission is a quarter of one carrier's data — a handful of files.
+# Cap the count so a client can't open thousands of file handles in one request.
+DEFAULT_MAX_FILES = 50
+# xlsx/xlsm are zip containers; a small upload can decompress to gigabytes (a
+# "zip bomb") and exhaust memory when pandas opens it. Cap total uncompressed
+# size and per-entry compression ratio.
+DEFAULT_MAX_UNCOMPRESSED_MB = 200
+MAX_COMPRESSION_RATIO = 200
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -73,6 +82,26 @@ def get_submissions_dir() -> Path:
 def get_max_file_bytes() -> int:
     mb = int(os.environ.get("IFTA_WEB_MAX_FILE_MB", str(DEFAULT_MAX_FILE_MB)))
     return mb * 1024 * 1024
+
+
+def get_max_files() -> int:
+    return int(os.environ.get("IFTA_WEB_MAX_FILES", str(DEFAULT_MAX_FILES)))
+
+
+def get_max_uncompressed_bytes() -> int:
+    mb = int(os.environ.get("IFTA_WEB_MAX_UNCOMPRESSED_MB", str(DEFAULT_MAX_UNCOMPRESSED_MB)))
+    return mb * 1024 * 1024
+
+
+def _require_turnstile() -> bool:
+    """When true, refuse unauthenticated submissions if CAPTCHA isn't configured
+    (production safety so a missing secret can't silently disable bot protection)."""
+    return os.environ.get("IFTA_WEB_REQUIRE_TURNSTILE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _cors_origins() -> list[str]:
@@ -188,19 +217,32 @@ def create_app() -> FastAPI:
         has_valid_backend_key = (
             backend_key is not None
             and request_key is not None
-            and request_key == backend_key
+            # Constant-time compare so the shared key can't be recovered by
+            # timing a byte-by-byte `==`.
+            and secrets.compare_digest(request_key, backend_key)
         )
 
-        if turnstile_secret and not has_valid_backend_key:
-            if not cf_turnstile_response:
-                raise HTTPException(status_code=400, detail="missing CAPTCHA token")
-            remote_ip = request.client.host if request.client else None
-            if not verify_turnstile_token(
-                cf_turnstile_response,
-                secret=turnstile_secret,
-                remote_ip=remote_ip,
-            ):
-                raise HTTPException(status_code=400, detail="CAPTCHA verification failed")
+        if not has_valid_backend_key:
+            if turnstile_secret:
+                if not cf_turnstile_response:
+                    raise HTTPException(status_code=400, detail="missing CAPTCHA token")
+                remote_ip = request.client.host if request.client else None
+                if not verify_turnstile_token(
+                    cf_turnstile_response,
+                    secret=turnstile_secret,
+                    remote_ip=remote_ip,
+                ):
+                    raise HTTPException(status_code=400, detail="CAPTCHA verification failed")
+            elif _require_turnstile():
+                # CAPTCHA is mandated but no secret is configured — fail closed
+                # instead of silently accepting unauthenticated traffic.
+                log.error(
+                    "IFTA_WEB_REQUIRE_TURNSTILE is set but TURNSTILE_SECRET_KEY "
+                    "is missing — rejecting unauthenticated submission."
+                )
+                raise HTTPException(
+                    status_code=503, detail="CAPTCHA is required but not configured"
+                )
 
         # Collect all uploads — either the multi-file `files` field, or the
         # legacy mileage_file / fuel_file pair. At least one file is required.
@@ -216,6 +258,13 @@ def create_app() -> FastAPI:
 
         if not all_uploads:
             raise HTTPException(status_code=400, detail="at least one file is required")
+
+        max_files = get_max_files()
+        if len(all_uploads) > max_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"too many files: {len(all_uploads)} (max {max_files} per submission)",
+            )
 
         for upload, _prefix in all_uploads:
             _validate_upload(upload)
@@ -352,6 +401,12 @@ def create_app() -> FastAPI:
         """
         if not files:
             raise HTTPException(status_code=400, detail="at least one file is required")
+        max_files = get_max_files()
+        if len(files) > max_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"too many files: {len(files)} (max {max_files} per submission)",
+            )
         for upload in files:
             _validate_upload(upload)
 
@@ -582,6 +637,33 @@ def _unique_path(dest: Path) -> Path:
         n += 1
 
 
+def _archive_is_safe(path: Path) -> bool:
+    """Reject zip-based uploads (.xlsx/.xlsm) that decompress to far more than
+    their on-disk size — a decompression bomb that would exhaust memory when
+    pandas/openpyxl opens them. Non-zip files (csv/pdf/legacy .xls) pass through;
+    their size is already capped by the streaming write.
+    """
+    if not zipfile.is_zipfile(path):
+        return True
+    max_uncompressed = get_max_uncompressed_bytes()
+    try:
+        with zipfile.ZipFile(path) as zf:
+            total = 0
+            for info in zf.infolist():
+                total += info.file_size
+                if total > max_uncompressed:
+                    return False
+                if (
+                    info.compress_size > 0
+                    and info.file_size > 1_000_000
+                    and info.file_size / info.compress_size > MAX_COMPRESSION_RATIO
+                ):
+                    return False
+    except zipfile.BadZipFile:
+        return False
+    return True
+
+
 def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int, *, prefix: str) -> Path:
     """Save an uploaded file with a field-name prefix to avoid collisions.
 
@@ -604,4 +686,10 @@ def _save_upload(f: UploadFile, dest_dir: Path, max_bytes: int, *, prefix: str) 
                     detail=f"{f.filename} exceeds {max_bytes // (1024 * 1024)} MB limit",
                 )
             out.write(chunk)
+    if not _archive_is_safe(dest):
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=413,
+            detail=f"{f.filename} decompresses to too much data (possible zip bomb)",
+        )
     return dest

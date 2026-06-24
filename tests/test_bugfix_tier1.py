@@ -13,8 +13,6 @@ import pytest
 from ifta.client import ClientInboxError, resolve_inbox, resolve_output_dir
 from ifta.web.app import _save_upload, _unique_path
 
-ROOT = Path(__file__).resolve().parents[1]
-
 
 class _Upload:
     """Minimal stand-in for starlette's UploadFile (_save_upload uses only these)."""
@@ -55,25 +53,42 @@ def test_uploads_that_sanitize_to_the_same_name_dont_collide(tmp_path):
 # --- BUG-003 ---------------------------------------------------------------
 
 
-def test_unknown_client_is_rejected_not_silently_reassigned():
-    # inbox/Q4-2025 belongs to menshikov_llc; a typo must NOT inherit its data.
+@pytest.fixture
+def tenant_root(tmp_path: Path) -> Path:
+    """A hermetic project root whose shared Q1-2026 inbox is owned by carrier_a.
+
+    Replaces the old dependence on the real (untracked) inbox/Q4-2025 ownership
+    marker, so the cross-tenant guard is tested against synthetic data.
+    """
+    import json
+
+    shared = tmp_path / "inbox" / "Q1-2026"
+    shared.mkdir(parents=True)
+    (shared / "client.json").write_text(
+        json.dumps({"client_id": "carrier_a", "name": "CARRIER A"}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def test_unknown_client_is_rejected_not_silently_reassigned(tenant_root: Path) -> None:
+    # The shared inbox belongs to carrier_a; a typo must NOT inherit its data.
     with pytest.raises(ClientInboxError):
-        resolve_inbox(ROOT, "Q4-2025", "does_not_exist")
+        resolve_inbox(tenant_root, "Q1-2026", "does_not_exist")
     with pytest.raises(ClientInboxError):
-        resolve_output_dir(ROOT, "Q4-2025", "does_not_exist")
+        resolve_output_dir(tenant_root, "Q1-2026", "does_not_exist")
 
 
-def test_cross_tenant_client_is_rejected():
-    # Asking for dm_express against menshikov's shared quarter inbox must refuse.
+def test_cross_tenant_client_is_rejected(tenant_root: Path) -> None:
+    # Asking for carrier_b against carrier_a's shared quarter inbox must refuse.
     with pytest.raises(ClientInboxError):
-        resolve_inbox(ROOT, "Q4-2025", "dm_express")
+        resolve_inbox(tenant_root, "Q1-2026", "carrier_b")
 
 
-def test_matching_client_still_uses_the_shared_inbox():
-    # The legitimate single-tenant path: the shared Q4-2025 inbox IS menshikov's.
-    assert resolve_inbox(ROOT, "Q4-2025", "menshikov_llc") == ROOT / "inbox" / "Q4-2025"
+def test_matching_client_still_uses_the_shared_inbox(tenant_root: Path) -> None:
+    # The legitimate single-tenant path: the shared inbox IS carrier_a's.
+    assert resolve_inbox(tenant_root, "Q1-2026", "carrier_a") == tenant_root / "inbox" / "Q1-2026"
 
 
-def test_no_client_uses_shared_inbox_unchanged():
-    assert resolve_inbox(ROOT, "Q4-2025") == ROOT / "inbox" / "Q4-2025"
-    assert resolve_output_dir(ROOT, "Q4-2025") == ROOT / "outputs" / "Q4-2025"
+def test_no_client_uses_shared_inbox_unchanged(tenant_root: Path) -> None:
+    assert resolve_inbox(tenant_root, "Q1-2026") == tenant_root / "inbox" / "Q1-2026"
+    assert resolve_output_dir(tenant_root, "Q1-2026") == tenant_root / "outputs" / "Q1-2026"
