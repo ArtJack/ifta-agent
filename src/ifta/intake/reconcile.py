@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal
 
 from ifta.intake.receipts import (
     ExistingFuelTransaction,
     ReceiptReview,
+    _parse_date,
     find_duplicate,
 )
 
@@ -289,15 +290,3 @@ def _coerce_date(value: str | date | None) -> date | None:
     if isinstance(value, date):
         return value
     return _parse_date(value)
-
-
-def _parse_date(value: str | None) -> date | None:
-    if not value:
-        return None
-    text = value.strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    return None
