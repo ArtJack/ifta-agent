@@ -30,7 +30,7 @@ from ifta.models import (
     normalize_state,
 )
 
-MILES_KEYWORDS = {"miles", "mile", "distance", "km"}
+MILES_KEYWORDS = {"miles", "mile", "distance", "km", "kilometer", "kilometre"}
 GALLONS_KEYWORDS = {
     "gallons",
     "gallon",
@@ -39,7 +39,18 @@ GALLONS_KEYWORDS = {
     "volume",
     "qty",
     "quantity",
+    "liter",
+    "liters",
+    "litre",
+    "litres",
 }
+
+# Unit conversions. Distances/volumes are sometimes reported metric (Canadian
+# carriers, some ELDs); IFTA filings are in miles and US gallons, so a column
+# whose header names a metric unit is converted on the way in rather than being
+# silently treated as already-imperial.
+_KM_TO_MILES = 0.621371
+_LITERS_TO_GALLONS = 1.0 / 3.785411784
 TAX_PAID_KEYWORDS = {"taxpaid", "fueltax"}
 TRUCK_KEYWORDS = {"truck", "unit", "vehicle", "vin", "asset"}
 STATE_KEYWORDS = {"state", "jurisdiction", "merchantstate", "buystate", "province"}
@@ -212,7 +223,13 @@ def _extract_blocks(df: pd.DataFrame, header_row: int) -> list[tuple[str | None,
         is_summary[0] = False
 
     for idx, _header, role in cols:
-        if role == "state" and "state" in current:
+        # A repeated state OR truck column marks the start of the next
+        # side-by-side block. Flushing on a repeated truck column is what makes
+        # truck-first layouts (Truck│State│Miles │ Truck│State│Miles) correct:
+        # without it, the second block's truck column overwrites the first
+        # block's truck before it is flushed, so one truck's id gets stapled to
+        # another truck's miles/fuel (CRITICAL data-integrity bug).
+        if role in ("state", "truck") and role in current:
             flush()
         if role == "summary":
             is_summary[0] = True
@@ -235,21 +252,66 @@ def _extract_blocks(df: pd.DataFrame, header_row: int) -> list[tuple[str | None,
     return blocks
 
 
+def _normalize_number(s: str) -> str:
+    """Normalize US/European thousands+decimal separators to a float literal.
+
+        "1,234.56" -> "1234.56"   (US: comma thousands, dot decimal)
+        "1.234,56" -> "1234.56"   (EU: dot thousands, comma decimal)
+        "1234,56"  -> "1234.56"   (EU decimal comma, no grouping)
+        "12,5"     -> "12.5"      (decimal comma, 1-2 fraction digits)
+        "1,234"    -> "1234"      (ambiguous; keep historical US-thousands read)
+
+    Previously every comma was stripped unconditionally, which dropped European
+    decimals to 0 ("1.234,56" -> invalid) or mis-scaled them 1000x ("1234,56"
+    -> 123456). The single-comma-with-exactly-3-trailing-digits case ("1,234")
+    stays a thousands separator to preserve prior behaviour on US data.
+    """
+    has_comma = "," in s
+    has_dot = "." in s
+    if has_comma and has_dot:
+        if s.rfind(",") > s.rfind("."):
+            return s.replace(".", "").replace(",", ".")  # European
+        return s.replace(",", "")  # US
+    if has_comma:
+        head, _, tail = s.rpartition(",")
+        if head.count(",") == 0 and 1 <= len(tail) <= 2 and tail.isdigit():
+            return s.replace(",", ".")  # decimal comma
+        return s.replace(",", "")  # thousands grouping
+    return s
+
+
 def _to_float(v: object) -> float:
     if v is None:
         return 0.0
-    s = str(v).strip().replace(",", "").replace("$", "")
+    s = str(v).strip().replace("$", "")
     if s in ("", "-", "—", "nan", "NaN"):
         return 0.0
     # parentheses = negative (accounting style)
     neg = s.startswith("(") and s.endswith(")")
     if neg:
-        s = s[1:-1]
+        s = s[1:-1].strip()
+    s = _normalize_number(s)
     try:
         f = float(s)
     except ValueError:
         return 0.0
     return -f if neg else f
+
+
+def _miles_unit_factor(header: object) -> float:
+    """Factor to convert a miles-column's values to miles (km -> miles)."""
+    h = _norm_header(header)
+    if "kilomet" in h or h.endswith("km"):
+        return _KM_TO_MILES
+    return 1.0
+
+
+def _gallons_unit_factor(header: object) -> float:
+    """Factor to convert a gallons-column's values to US gallons (L -> gal)."""
+    h = _norm_header(header)
+    if "liter" in h or "litre" in h:
+        return _LITERS_TO_GALLONS
+    return 1.0
 
 
 def _cell_str(row: pd.Series, col: int) -> str | None:
@@ -296,6 +358,19 @@ def _rows_from_block(
     driver_col = roles.get("driver")
     card_col = roles.get("card")
 
+    # Metric-unit conversion is decided once per block from the header text.
+    header = df.iloc[header_row]
+    miles_factor = (
+        _miles_unit_factor(header.iloc[miles_col])
+        if miles_col is not None and miles_col < len(header)
+        else 1.0
+    )
+    gallons_factor = (
+        _gallons_unit_factor(header.iloc[gallons_col])
+        if gallons_col is not None and gallons_col < len(header)
+        else 1.0
+    )
+
     for r in range(header_row + 1, len(df)):
         row = df.iloc[r]
         if _first_nonempty_cell(row).upper() == "TOTAL":
@@ -320,11 +395,11 @@ def _rows_from_block(
                 cards[truck_id] = c
 
         if miles_col is not None and miles_col < len(row):
-            m = _to_float(row.iloc[miles_col])
+            m = _to_float(row.iloc[miles_col]) * miles_factor
             if m:
                 miles.append(MileageRecord(truck_id, state, m))
         if gallons_col is not None and gallons_col < len(row):
-            g = _to_float(row.iloc[gallons_col])
+            g = _to_float(row.iloc[gallons_col]) * gallons_factor
             tp = _to_float(row.iloc[tax_col]) if tax_col is not None and tax_col < len(row) else 0.0
             if g or tp:
                 fuel.append(FuelRecord(truck_id, state, g, tp))

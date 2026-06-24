@@ -29,25 +29,57 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-def test_onboard_refuses_alias_collision(runner: CliRunner) -> None:
-    """`ifta onboard david` must fail because 'david' is an alias of dm_express."""
-    result = runner.invoke(main, ["onboard", "david"])
+@pytest.fixture
+def isolated_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Point the CLI at a tmp project root holding one synthetic client.
+
+    Keeps the onboard collision tests hermetic: they no longer depend on (or
+    write into) the real data/clients registry. The committed-free fixture is
+    'acme_freight' with alias 'acme'.
+    """
+    import json
+
+    from ifta import cli
+    from ifta import client as client_mod
+
+    cdir = tmp_path / "data" / "clients" / "acme_freight"
+    cdir.mkdir(parents=True)
+    (cdir / "client.json").write_text(
+        json.dumps(
+            {
+                "client_id": "acme_freight",
+                "name": "ACME FREIGHT",
+                "aliases": ["acme"],
+                "active": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    client_mod.reload_registry(tmp_path)
+    yield tmp_path
+    client_mod.reload_registry(tmp_path)  # drop the tmp registry from the cache
+
+
+def test_onboard_refuses_existing_id(runner: CliRunner, isolated_registry) -> None:
+    """`ifta onboard acme_freight` must fail because the id is taken."""
+    result = runner.invoke(main, ["onboard", "acme_freight"])
     assert result.exit_code != 0, result.output
-    assert "dm_express" in result.output
+
+
+def test_onboard_refuses_alias_collision(runner: CliRunner, isolated_registry) -> None:
+    """`ifta onboard acme` must fail because 'acme' is an alias of acme_freight."""
+    result = runner.invoke(main, ["onboard", "acme"])
+    assert result.exit_code != 0, result.output
+    assert "acme_freight" in result.output
     assert "alias" in result.output.lower() or "resolves" in result.output.lower()
 
 
-def test_onboard_refuses_existing_id(runner: CliRunner) -> None:
-    """`ifta onboard dm_express` must fail because the id is taken."""
-    result = runner.invoke(main, ["onboard", "dm_express"])
+def test_onboard_refuses_alias_case_insensitive(runner: CliRunner, isolated_registry) -> None:
+    """Aliases are normalized — 'ACME', 'Acme', 'acme' all collide."""
+    result = runner.invoke(main, ["onboard", "ACME"])
     assert result.exit_code != 0, result.output
-
-
-def test_onboard_refuses_alias_case_insensitive(runner: CliRunner) -> None:
-    """Aliases are normalized — 'DAVID', 'David', 'david' all collide."""
-    result = runner.invoke(main, ["onboard", "DAVID"])
-    assert result.exit_code != 0, result.output
-    assert "dm_express" in result.output
+    assert "acme_freight" in result.output
 
 
 # ---------------------------------------------------------------------------

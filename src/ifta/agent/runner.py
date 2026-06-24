@@ -37,6 +37,11 @@ DEFAULT_EFFORT = "medium"
 # missing-receipt / anomaly findings). max_tokens is a ceiling, not a target —
 # adaptive thinking still emits only what the task needs, so the extra room is free.
 DEFAULT_MAX_TOKENS = {"review": 12288, "ask": 2048, "chat": 4096}
+# Hard cap on agentic tool-call rounds per turn. A legitimate review settles in
+# well under a dozen tool calls; without a ceiling a confused/looping model
+# could call tools indefinitely, running up unbounded latency and API cost. The
+# runner stops yielding once the cap is hit (see anthropic tool_runner).
+DEFAULT_MAX_ITERATIONS = 25
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +189,12 @@ def run_agent(
     history: list[dict[str, Any]] | None = None,
     max_tokens: int = 4096,
     effort: str = DEFAULT_EFFORT,
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
 ) -> tuple[str, list[dict[str, Any]], AgentMetrics]:
     """Run one agent turn (tool runner handles tool calls internally).
 
-    Returns (final_text, updated_history, metrics).
+    Returns (final_text, updated_history, metrics). `max_iterations` bounds the
+    number of tool-call rounds so a looping model can't run up unbounded cost.
     """
     client = _client()
     messages: list[dict[str, Any]] = (history or []) + [{"role": "user", "content": user_message}]
@@ -198,6 +205,7 @@ def run_agent(
     runner = tool_runner(
         model=model,
         max_tokens=max_tokens,
+        max_iterations=max_iterations,
         system=[
             {
                 "type": "text",

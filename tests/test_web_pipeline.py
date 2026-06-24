@@ -1,8 +1,8 @@
 """Tests for the web-intake pipeline driver.
 
-Uses the existing Q4-2025 Menshikov fixture as a real end-to-end check —
-same data the historical-accuracy regression covers, just driven through
-the web submission entry point.
+Drives the committed synthetic fixture (TEST LOGISTICS LLC, Q2-2026) through the
+web submission entry point — the same data the hermetic calc regression
+(test_q2_2026_synthetic) covers, so these run on a clean checkout with no PII.
 """
 
 from __future__ import annotations
@@ -23,10 +23,13 @@ from ifta.web.pipeline import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_CSV = ROOT / "inbox" / "Q4-2025" / "menshikov_miles_and_fuel.csv"
+FIXTURE_DIR = ROOT / "inbox" / "Q2-2026"
+FIXTURE_FILES = ("test_logistics_miles.xlsx", "test_logistics_fuel.xlsx")
+# Deterministic total tax for the synthetic fixture (see test_q2_2026_synthetic).
+EXPECTED_TOTAL = "265.60"
 
 
-def _make_submission(sid: str, quarter: str = "Q4-2025") -> Submission:
+def _make_submission(sid: str, quarter: str = "Q2-2026") -> Submission:
     return Submission(
         id=sid,
         email="customer@example.com",
@@ -34,14 +37,15 @@ def _make_submission(sid: str, quarter: str = "Q4-2025") -> Submission:
         status=SubmissionStatus.RUNNING,
         confirm_token="tok",
         created_at=datetime.now(UTC),
-        company="MENSHIKOV LLC",
+        company="TEST LOGISTICS LLC",
     )
 
 
-def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q4-2025") -> Path:
+def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q2-2026") -> Path:
     inbox = submissions_dir / sid / "inbox" / quarter
     inbox.mkdir(parents=True, exist_ok=True)
-    shutil.copy(FIXTURE_CSV, inbox / FIXTURE_CSV.name)
+    for name in FIXTURE_FILES:
+        shutil.copy(FIXTURE_DIR / name, inbox / name)
     return inbox
 
 
@@ -58,16 +62,16 @@ def test_process_submission_produces_packet(
 
     out_dir = process_submission(tmp_path, sub)
 
-    assert out_dir == tmp_path / sid / "outputs" / "Q4-2025"
+    assert out_dir == tmp_path / sid / "outputs" / "Q2-2026"
     portal = out_dir / "ifta_portal.csv"
     assert portal.exists() and portal.stat().st_size > 0
     review = out_dir / "review_note.md"
     assert review.exists()
     text = review.read_text(encoding="utf-8")
-    # Quarter is rendered in canonical "4Q2025" form by compute_return.
-    assert "4Q2025" in text or "Q4-2025" in text
-    # Menshikov Q4-2025 — known $795.16 total tax due.
-    assert "795.16" in text
+    # Quarter is rendered in canonical "2Q2026" form by compute_return.
+    assert "2Q2026" in text or "Q2-2026" in text
+    # Synthetic TEST LOGISTICS Q2-2026 — deterministic total tax due.
+    assert EXPECTED_TOTAL in text
 
     trucks_dir = out_dir / "trucks"
     assert trucks_dir.exists()
@@ -158,9 +162,9 @@ def test_process_submission_invokes_agent_when_key_present(
 
     out_dir = process_submission(tmp_path, sub)
 
-    assert captured["inbox_dir"] == tmp_path / sid / "inbox" / "Q4-2025"
+    assert captured["inbox_dir"] == tmp_path / sid / "inbox" / "Q2-2026"
     assert captured["output_dir"] == out_dir
-    assert captured["client_name"] == "MENSHIKOV LLC"
+    assert captured["client_name"] == "TEST LOGISTICS LLC"
     # The agent's note ends up in review_note.md
     review_text = (out_dir / "review_note.md").read_text(encoding="utf-8")
     assert "Anonymous submission OK" in review_text
@@ -187,13 +191,13 @@ def test_process_submission_falls_back_when_agent_errors(
     out_dir = process_submission(tmp_path, sub)
     # Packet still produced; review_note.md falls back to deterministic copy.
     text = (out_dir / "review_note.md").read_text(encoding="utf-8")
-    assert "795.16" in text
+    assert EXPECTED_TOTAL in text
     assert "deterministic pipeline output only" in text
 
 
 def test_process_submission_empty_inbox_raises(tmp_path: Path) -> None:
     sid = "empty"
-    inbox = tmp_path / sid / "inbox" / "Q4-2025"
+    inbox = tmp_path / sid / "inbox" / "Q2-2026"
     inbox.mkdir(parents=True)
     # Empty inbox — no usable data
     sub = _make_submission(sid)
