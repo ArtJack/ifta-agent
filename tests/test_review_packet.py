@@ -8,7 +8,7 @@ from ifta.client import ClientContext
 from ifta.models import CleanData, FuelRecord, MileageRecord
 from ifta.rates import RateTable
 from ifta.review_packet import build_review_packet, determine_filing_status
-from ifta.validator import Finding
+from ifta.validator import Finding, validate
 
 
 def _rates(*, fallback: bool = False) -> RateTable:
@@ -47,6 +47,44 @@ def test_filing_status_blocks_on_rate_fallback() -> None:
 
     assert status["status"] == "DO_NOT_FILE"
     assert any("rates unavailable" in reason for reason in status["reasons"])
+
+
+def _return_with_fleet_mpg(miles: float, gallons: float):
+    """A one-truck return whose fleet MPG = miles/gallons, for band testing."""
+    data = CleanData(
+        miles=[MileageRecord("T1", "CA", miles)],
+        fuel=[FuelRecord("T1", "CA", gallons)],
+    )
+    return data, compute_return(data, _rates())
+
+
+def test_implausibly_high_fleet_mpg_blocks_filing() -> None:
+    # 10,000 mi / 500 gal = 20 MPG — impossible for a heavy diesel, so a whole
+    # fuel source is missing and the return is materially wrong. Must not file.
+    data, ret = _return_with_fleet_mpg(10_000, 500)
+    findings = validate(data, ret)
+
+    mpg = next(f for f in findings if f.code == "MPG_HIGH")
+    assert mpg.severity == "error"
+    assert determine_filing_status(ret, findings)["status"] == "DO_NOT_FILE"
+
+
+def test_implausibly_low_fleet_mpg_blocks_filing() -> None:
+    # 1,000 mi / 500 gal = 2 MPG — below the realistic floor (missing miles or
+    # duplicate fuel). Also blocks.
+    data, ret = _return_with_fleet_mpg(1_000, 500)
+    findings = validate(data, ret)
+
+    mpg = next(f for f in findings if f.code == "MPG_LOW")
+    assert mpg.severity == "error"
+    assert determine_filing_status(ret, findings)["status"] == "DO_NOT_FILE"
+
+
+def test_realistic_fleet_mpg_raises_no_mpg_finding() -> None:
+    # 1,000 mi / 150 gal = 6.67 MPG — squarely in the realistic band.
+    data, ret = _return_with_fleet_mpg(1_000, 150)
+    findings = validate(data, ret)
+    assert not any(f.code in {"MPG_HIGH", "MPG_LOW"} for f in findings)
 
 
 def test_filing_status_allows_warnings_but_not_clean_ready() -> None:
