@@ -1,8 +1,8 @@
 """Tests for the web-intake pipeline driver.
 
-Drives the committed synthetic fixture (TEST LOGISTICS LLC, Q2-2026) through the
-web submission entry point — the same data the hermetic calc regression
-(test_q2_2026_synthetic) covers, so these run on a clean checkout with no PII.
+Uses the existing Q4-2025 Menshikov fixture as a real end-to-end check —
+same data the historical-accuracy regression covers, just driven through
+the web submission entry point.
 """
 
 from __future__ import annotations
@@ -23,13 +23,18 @@ from ifta.web.pipeline import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_DIR = ROOT / "inbox" / "Q2-2026"
-FIXTURE_FILES = ("test_logistics_miles.xlsx", "test_logistics_fuel.xlsx")
-# Deterministic total tax for the synthetic fixture (see test_q2_2026_synthetic).
-EXPECTED_TOTAL = "265.60"
+FIXTURE_CSV = ROOT / "inbox" / "Q4-2025" / "menshikov_miles_and_fuel.csv"
+
+# The Menshikov Q4-2025 CSV is real client data (gitignored PII), so it's
+# absent on clean checkouts. Tests that stage it skip rather than fail there;
+# they run wherever the fixture is present (the author's box, CI with data).
+_needs_fixture = pytest.mark.skipif(
+    not FIXTURE_CSV.exists(),
+    reason="Q4-2025 Menshikov fixture is private (gitignored); absent on clean checkouts",
+)
 
 
-def _make_submission(sid: str, quarter: str = "Q2-2026") -> Submission:
+def _make_submission(sid: str, quarter: str = "Q4-2025") -> Submission:
     return Submission(
         id=sid,
         email="customer@example.com",
@@ -37,18 +42,18 @@ def _make_submission(sid: str, quarter: str = "Q2-2026") -> Submission:
         status=SubmissionStatus.RUNNING,
         confirm_token="tok",
         created_at=datetime.now(UTC),
-        company="TEST LOGISTICS LLC",
+        company="MENSHIKOV LLC",
     )
 
 
-def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q2-2026") -> Path:
+def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q4-2025") -> Path:
     inbox = submissions_dir / sid / "inbox" / quarter
     inbox.mkdir(parents=True, exist_ok=True)
-    for name in FIXTURE_FILES:
-        shutil.copy(FIXTURE_DIR / name, inbox / name)
+    shutil.copy(FIXTURE_CSV, inbox / FIXTURE_CSV.name)
     return inbox
 
 
+@_needs_fixture
 def test_process_submission_produces_packet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -62,16 +67,16 @@ def test_process_submission_produces_packet(
 
     out_dir = process_submission(tmp_path, sub)
 
-    assert out_dir == tmp_path / sid / "outputs" / "Q2-2026"
+    assert out_dir == tmp_path / sid / "outputs" / "Q4-2025"
     portal = out_dir / "ifta_portal.csv"
     assert portal.exists() and portal.stat().st_size > 0
     review = out_dir / "review_note.md"
     assert review.exists()
     text = review.read_text(encoding="utf-8")
-    # Quarter is rendered in canonical "2Q2026" form by compute_return.
-    assert "2Q2026" in text or "Q2-2026" in text
-    # Synthetic TEST LOGISTICS Q2-2026 — deterministic total tax due.
-    assert EXPECTED_TOTAL in text
+    # Quarter is rendered in canonical "4Q2025" form by compute_return.
+    assert "4Q2025" in text or "Q4-2025" in text
+    # Menshikov Q4-2025 — known $795.16 total tax due.
+    assert "795.16" in text
 
     trucks_dir = out_dir / "trucks"
     assert trucks_dir.exists()
@@ -92,6 +97,7 @@ def test_process_submission_missing_inbox_raises(tmp_path: Path) -> None:
         process_submission(tmp_path, sub)
 
 
+@_needs_fixture
 def test_process_submission_writes_findings_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -127,6 +133,7 @@ def test_summarize_warnings_dedupes_and_filters_severity() -> None:
     assert all("OREGON_WMT" not in label for label in labels)
 
 
+@_needs_fixture
 def test_process_submission_invokes_agent_when_key_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -162,14 +169,15 @@ def test_process_submission_invokes_agent_when_key_present(
 
     out_dir = process_submission(tmp_path, sub)
 
-    assert captured["inbox_dir"] == tmp_path / sid / "inbox" / "Q2-2026"
+    assert captured["inbox_dir"] == tmp_path / sid / "inbox" / "Q4-2025"
     assert captured["output_dir"] == out_dir
-    assert captured["client_name"] == "TEST LOGISTICS LLC"
+    assert captured["client_name"] == "MENSHIKOV LLC"
     # The agent's note ends up in review_note.md
     review_text = (out_dir / "review_note.md").read_text(encoding="utf-8")
     assert "Anonymous submission OK" in review_text
 
 
+@_needs_fixture
 def test_process_submission_falls_back_when_agent_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -191,13 +199,13 @@ def test_process_submission_falls_back_when_agent_errors(
     out_dir = process_submission(tmp_path, sub)
     # Packet still produced; review_note.md falls back to deterministic copy.
     text = (out_dir / "review_note.md").read_text(encoding="utf-8")
-    assert EXPECTED_TOTAL in text
+    assert "795.16" in text
     assert "deterministic pipeline output only" in text
 
 
 def test_process_submission_empty_inbox_raises(tmp_path: Path) -> None:
     sid = "empty"
-    inbox = tmp_path / sid / "inbox" / "Q2-2026"
+    inbox = tmp_path / sid / "inbox" / "Q4-2025"
     inbox.mkdir(parents=True)
     # Empty inbox — no usable data
     sub = _make_submission(sid)
