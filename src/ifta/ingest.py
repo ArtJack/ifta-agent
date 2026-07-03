@@ -43,8 +43,17 @@ GALLONS_KEYWORDS = {
 TAX_PAID_KEYWORDS = {"taxpaid", "fueltax"}
 TRUCK_KEYWORDS = {"truck", "unit", "vehicle", "vin", "asset"}
 STATE_KEYWORDS = {"state", "jurisdiction", "merchantstate", "buystate", "province"}
+# Headers that are *exactly* a state abbreviation. Matched by equality, never as
+# a substring — "st" also occurs inside cost/last/first/district. Fuel-card
+# transaction exports (e.g. Love's) label the jurisdiction column simply "St".
+STATE_ABBREV_HEADERS = {"st"}
 DRIVER_KEYWORDS = {"driver", "operator", "drivername"}
 CARD_KEYWORDS = {"cardnumber", "cardno", "fuelcard", "card"}
+# A per-row product/description column lets us drop lines that aren't taxable
+# IFTA diesel. DEF/AdBlue is not motor fuel; reefer/dyed diesel is off-road —
+# their gallons must never land in the return.
+PRODUCT_KEYWORDS = {"product"}
+NONTAXABLE_PRODUCT_RE = re.compile(r"\bDEF\b|EXHAUST|REEFER|AD\s*BLUE|DYED", re.IGNORECASE)
 # Columns that mark a block as already-computed summary output — we skip it.
 SUMMARY_KEYWORDS = {
     "taxrate",
@@ -83,6 +92,12 @@ def _classify_column(header: str) -> str | None:
     for kw in STATE_KEYWORDS:
         if kw in h:
             return "state"
+    if h in STATE_ABBREV_HEADERS:  # bare "St" — exact match only (see set docstring)
+        return "state"
+    # Product/description column, so DEF/reefer rows can be dropped downstream.
+    for kw in PRODUCT_KEYWORDS:
+        if kw in h:
+            return "product"
     for kw in TRUCK_KEYWORDS:
         if kw in h:
             return "truck"
@@ -218,8 +233,10 @@ def _extract_blocks(df: pd.DataFrame, header_row: int) -> list[tuple[str | None,
             is_summary[0] = True
             continue
         if role == "truck":
-            # truck identifier might be a column OR sometimes header text is the truck id ("2013")
-            current["truck"] = idx
+            # First truck-ish column wins, so a later merchant column like
+            # "Truck Stop" can't clobber the real "Truck #". (The id may also
+            # come from neighbouring header text, e.g. "2013".)
+            current.setdefault("truck", idx)
             continue
         if role and role not in current:
             current[role] = idx
@@ -295,6 +312,7 @@ def _rows_from_block(
     tax_col = roles.get("tax_paid")
     driver_col = roles.get("driver")
     card_col = roles.get("card")
+    product_col = roles.get("product")
 
     for r in range(header_row + 1, len(df)):
         row = df.iloc[r]
@@ -323,15 +341,29 @@ def _rows_from_block(
             m = _to_float(row.iloc[miles_col])
             if m:
                 miles.append(MileageRecord(truck_id, state, m))
-        if gallons_col is not None and gallons_col < len(row):
-            g = _to_float(row.iloc[gallons_col])
-            tp = _to_float(row.iloc[tax_col]) if tax_col is not None and tax_col < len(row) else 0.0
-            if g or tp:
-                fuel.append(FuelRecord(truck_id, state, g, tp))
-        elif tax_col is not None and tax_col < len(row):
-            tp = _to_float(row.iloc[tax_col])
-            if tp:
-                fuel.append(FuelRecord(truck_id, state, 0.0, tp))
+
+        # A DEF/AdBlue/reefer line is not taxable IFTA fuel — count no gallons
+        # and claim no tax-paid credit for it, regardless of the amounts shown.
+        nontaxable = False
+        if product_col is not None and product_col < len(row):
+            pv = row.iloc[product_col]
+            if pv is not None and NONTAXABLE_PRODUCT_RE.search(str(pv)):
+                nontaxable = True
+
+        if not nontaxable:
+            if gallons_col is not None and gallons_col < len(row):
+                g = _to_float(row.iloc[gallons_col])
+                tp = (
+                    _to_float(row.iloc[tax_col])
+                    if tax_col is not None and tax_col < len(row)
+                    else 0.0
+                )
+                if g or tp:
+                    fuel.append(FuelRecord(truck_id, state, g, tp))
+            elif tax_col is not None and tax_col < len(row):
+                tp = _to_float(row.iloc[tax_col])
+                if tp:
+                    fuel.append(FuelRecord(truck_id, state, 0.0, tp))
     return miles, fuel, drivers, cards
 
 
@@ -400,6 +432,16 @@ def ingest_folder(folder: Path, *, skip_files: set[str] | None = None) -> CleanD
         except Exception as e:
             print(f"  ! skipping {path.name}: {e}")
             continue
+        if not data.miles and not data.fuel:
+            # A recognised data file that yields nothing is almost always an
+            # unrecognised layout (e.g. a jurisdiction column not named
+            # State/St/Jurisdiction) — surface it loudly instead of silently
+            # dropping a whole fuel or mileage source from the return.
+            print(
+                f"  ⚠ {path.name}: no mileage or fuel rows recognised — this file "
+                "contributed NOTHING to the return. Check its column headers "
+                "(especially the jurisdiction/state column)."
+            )
         merged.miles.extend(data.miles)
         merged.fuel.extend(data.fuel)
         for k, v in data.truck_drivers.items():
