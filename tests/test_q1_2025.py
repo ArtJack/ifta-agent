@@ -2,13 +2,20 @@
 
 from pathlib import Path
 
+import pytest
+
 from ifta.calc import compute_return
 from ifta.ingest import ingest_folder
 from ifta.rates import fetch_rates
 
 ROOT = Path(__file__).resolve().parents[1]
+INBOX = ROOT / "inbox" / "Q1-2025"
 
 
+@pytest.mark.skipif(
+    not INBOX.exists(),
+    reason="inbox/Q1-2025 holds private client data (gitignored); absent on clean checkouts",
+)
 def test_q1_2025_totals() -> None:
     data = ingest_folder(ROOT / "inbox" / "Q1-2025")
     rates = fetch_rates("Q1-2025")

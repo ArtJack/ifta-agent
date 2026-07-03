@@ -18,6 +18,7 @@ from ifta.agent.runner import (
     write_review_md,
 )
 from ifta.cli import main
+from ifta.client import scaffold_client
 
 # ---------------------------------------------------------------------------
 # D-011 — alias collision detection in onboard
@@ -29,7 +30,28 @@ def runner() -> CliRunner:
     return CliRunner()
 
 
-def test_onboard_refuses_alias_collision(runner: CliRunner) -> None:
+@pytest.fixture
+def registered_dm_express(cli_project_root: Path) -> Path:
+    """Isolated project root with 'dm_express' registered (alias 'david').
+
+    ``cli_project_root`` (see conftest.py) points the CLI at a temp dir, so
+    scaffolding here never touches the real repo. Seeding dm_express with a
+    'david' alias reproduces the exact collision these regressions guard —
+    without depending on the author's private client registry.
+    """
+    scaffold_client(
+        cli_project_root,
+        "dm_express",
+        name="DM EXPRESS",
+        aliases=("david",),
+        make_inbox=False,
+    )
+    return cli_project_root
+
+
+def test_onboard_refuses_alias_collision(
+    runner: CliRunner, registered_dm_express: Path
+) -> None:
     """`ifta onboard david` must fail because 'david' is an alias of dm_express."""
     result = runner.invoke(main, ["onboard", "david"])
     assert result.exit_code != 0, result.output
@@ -37,13 +59,17 @@ def test_onboard_refuses_alias_collision(runner: CliRunner) -> None:
     assert "alias" in result.output.lower() or "resolves" in result.output.lower()
 
 
-def test_onboard_refuses_existing_id(runner: CliRunner) -> None:
+def test_onboard_refuses_existing_id(
+    runner: CliRunner, registered_dm_express: Path
+) -> None:
     """`ifta onboard dm_express` must fail because the id is taken."""
     result = runner.invoke(main, ["onboard", "dm_express"])
     assert result.exit_code != 0, result.output
 
 
-def test_onboard_refuses_alias_case_insensitive(runner: CliRunner) -> None:
+def test_onboard_refuses_alias_case_insensitive(
+    runner: CliRunner, registered_dm_express: Path
+) -> None:
     """Aliases are normalized — 'DAVID', 'David', 'david' all collide."""
     result = runner.invoke(main, ["onboard", "DAVID"])
     assert result.exit_code != 0, result.output
