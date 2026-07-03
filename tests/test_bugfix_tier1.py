@@ -6,6 +6,7 @@ BUG-003 — an unknown/mistyped --client silently fell back to the shared quarte
 """
 
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,27 @@ from ifta.client import ClientInboxError, resolve_inbox, resolve_output_dir
 from ifta.web.app import _save_upload, _unique_path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def owned_quarter(tmp_path: Path) -> Path:
+    """A project root whose shared Q4-2025 inbox declares an owner.
+
+    BUG-003 is about the shared ``inbox/<quarter>/`` folder: when its
+    ``client.json`` names a carrier, requests for a *different* client must be
+    refused rather than silently handed that carrier's data. Building the
+    fixture in a temp dir keeps the test hermetic — it exercises the real
+    ``resolve_inbox`` ownership logic without depending on the author's
+    private ``inbox/Q4-2025/`` (which is gitignored PII and absent on clean
+    checkouts).
+    """
+    inbox = tmp_path / "inbox" / "Q4-2025"
+    inbox.mkdir(parents=True)
+    (inbox / "client.json").write_text(
+        json.dumps({"client_id": "menshikov_llc", "name": "MENSHIKOV LLC"}),
+        encoding="utf-8",
+    )
+    return tmp_path
 
 
 class _Upload:
@@ -55,25 +77,31 @@ def test_uploads_that_sanitize_to_the_same_name_dont_collide(tmp_path):
 # --- BUG-003 ---------------------------------------------------------------
 
 
-def test_unknown_client_is_rejected_not_silently_reassigned():
+def test_unknown_client_is_rejected_not_silently_reassigned(owned_quarter: Path):
     # inbox/Q4-2025 belongs to menshikov_llc; a typo must NOT inherit its data.
     with pytest.raises(ClientInboxError):
-        resolve_inbox(ROOT, "Q4-2025", "does_not_exist")
+        resolve_inbox(owned_quarter, "Q4-2025", "does_not_exist")
     with pytest.raises(ClientInboxError):
-        resolve_output_dir(ROOT, "Q4-2025", "does_not_exist")
+        resolve_output_dir(owned_quarter, "Q4-2025", "does_not_exist")
 
 
-def test_cross_tenant_client_is_rejected():
+def test_cross_tenant_client_is_rejected(owned_quarter: Path):
     # Asking for dm_express against menshikov's shared quarter inbox must refuse.
     with pytest.raises(ClientInboxError):
-        resolve_inbox(ROOT, "Q4-2025", "dm_express")
+        resolve_inbox(owned_quarter, "Q4-2025", "dm_express")
 
 
-def test_matching_client_still_uses_the_shared_inbox():
+def test_matching_client_still_uses_the_shared_inbox(owned_quarter: Path):
     # The legitimate single-tenant path: the shared Q4-2025 inbox IS menshikov's.
-    assert resolve_inbox(ROOT, "Q4-2025", "menshikov_llc") == ROOT / "inbox" / "Q4-2025"
+    assert (
+        resolve_inbox(owned_quarter, "Q4-2025", "menshikov_llc")
+        == owned_quarter / "inbox" / "Q4-2025"
+    )
 
 
-def test_no_client_uses_shared_inbox_unchanged():
-    assert resolve_inbox(ROOT, "Q4-2025") == ROOT / "inbox" / "Q4-2025"
-    assert resolve_output_dir(ROOT, "Q4-2025") == ROOT / "outputs" / "Q4-2025"
+def test_no_client_uses_shared_inbox_unchanged(owned_quarter: Path):
+    assert resolve_inbox(owned_quarter, "Q4-2025") == owned_quarter / "inbox" / "Q4-2025"
+    assert (
+        resolve_output_dir(owned_quarter, "Q4-2025")
+        == owned_quarter / "outputs" / "Q4-2025"
+    )
