@@ -50,24 +50,31 @@ def validate(data: CleanData, ret: IftaReturn) -> list[Finding]:
     sanity = kb["fleet_mpg_calculation"]["sanity_range"]
     mpg_lo = sanity["min_realistic_heavy_diesel"]
     mpg_hi = sanity["max_realistic_heavy_diesel"]
+    # A fleet MPG outside the physically realistic band is not a "double-check"
+    # nag — it means miles or fuel are materially incomplete, so the per-state
+    # taxable-gallon split (and therefore the tax) is wrong. It must block
+    # filing, not merely warn. (E.g. a fleet showing 10.9 MPG because half the
+    # fuel is missing understates gallons burned in high-mileage/high-rate
+    # states and produces a materially wrong return.)
     if ret.fleet_mpg == 0:
         findings.append(Finding("error", "MPG_ZERO", "Fleet MPG is 0 — no fuel data parsed."))
     elif ret.fleet_mpg < mpg_lo:
         findings.append(
             Finding(
-                "warning",
+                "error",
                 "MPG_LOW",
-                f"Fleet MPG {ret.fleet_mpg:.2f} is below {mpg_lo} — likely missing miles "
-                "or duplicate fuel entries.",
+                f"Fleet MPG {ret.fleet_mpg:.2f} is below the realistic floor of {mpg_lo} — "
+                "likely missing miles or duplicate fuel entries. Do not file until resolved.",
             )
         )
     elif ret.fleet_mpg > mpg_hi:
         findings.append(
             Finding(
-                "warning",
+                "error",
                 "MPG_HIGH",
-                f"Fleet MPG {ret.fleet_mpg:.2f} is above {mpg_hi} — likely missing fuel "
-                "purchases or duplicate mileage rows.",
+                f"Fleet MPG {ret.fleet_mpg:.2f} is above the realistic ceiling of {mpg_hi} — "
+                "likely missing fuel purchases or duplicate mileage rows. Do not file until "
+                "resolved.",
             )
         )
 
