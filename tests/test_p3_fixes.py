@@ -125,49 +125,29 @@ def runner() -> CliRunner:
 
 
 def test_onboard_warns_when_chars_dropped(
-    runner: CliRunner, tmp_path: Path
+    runner: CliRunner, cli_project_root: Path
 ) -> None:
-    """Onboard with non-ASCII chars should warn the user."""
-    import shutil
+    """Onboard with non-ASCII chars should warn the user.
 
-    from ifta.cli import PROJECT_ROOT
-
-    # use a unique id that doesn't collide with the real registry,
-    # and clean up after.
+    ``cli_project_root`` (conftest.py) redirects the CLI at a temp dir, so the
+    scaffolded client lands there instead of in the tracked repo — no manual
+    cleanup, no pollution.
+    """
     test_id = "Café-Trucking-Ω"
     result = runner.invoke(main, ["onboard", test_id, "--name", "Cafe Co"])
-    norm = "caf_trucking"
-    try:
-        assert result.exit_code == 0, result.output
-        assert "Normalized" in result.output
-        assert "dropped" in result.output.lower()
-    finally:
-        for p in [
-            PROJECT_ROOT / "data" / "clients" / norm,
-            PROJECT_ROOT / "inbox" / norm,
-        ]:
-            if p.exists():
-                shutil.rmtree(p)
+    assert result.exit_code == 0, result.output
+    assert "Normalized" in result.output
+    assert "dropped" in result.output.lower()
 
 
-def test_onboard_does_not_warn_for_ascii(runner: CliRunner) -> None:
+def test_onboard_does_not_warn_for_ascii(
+    runner: CliRunner, cli_project_root: Path
+) -> None:
     """Plain ASCII ids shouldn't trigger the dropped-chars warning."""
-    import shutil
-
-    from ifta.cli import PROJECT_ROOT
-
     test_id = "abc_clean_carrier_test"
     result = runner.invoke(main, ["onboard", test_id])
-    try:
-        assert result.exit_code == 0, result.output
-        assert "dropped" not in result.output.lower()
-    finally:
-        for p in [
-            PROJECT_ROOT / "data" / "clients" / test_id,
-            PROJECT_ROOT / "inbox" / test_id,
-        ]:
-            if p.exists():
-                shutil.rmtree(p)
+    assert result.exit_code == 0, result.output
+    assert "dropped" not in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
