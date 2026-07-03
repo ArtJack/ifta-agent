@@ -9,9 +9,10 @@ The key invariants:
 
 from pathlib import Path
 
+from conftest import rates_or_skip
+
 from ifta.calc import compute_per_truck_lines, compute_return
 from ifta.ingest import ingest_folder
-from ifta.rates import fetch_rates
 from ifta.report import write_per_truck_filings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _load(quarter: str):
     data = ingest_folder(ROOT / "inbox" / quarter)
-    rates = fetch_rates(quarter)
+    # Q2-2026 rates aren't committed as a cache file, so this needs network.
+    # rates_or_skip skips (not fails) when the box is offline.
+    rates = rates_or_skip(quarter)
     ret = compute_return(data, rates)
     per_truck = compute_per_truck_lines(data, ret, rates)
     return data, ret, rates, per_truck

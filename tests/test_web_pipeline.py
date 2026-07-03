@@ -25,6 +25,14 @@ from ifta.web.pipeline import (
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_CSV = ROOT / "inbox" / "Q4-2025" / "menshikov_miles_and_fuel.csv"
 
+# The Menshikov Q4-2025 CSV is real client data (gitignored PII), so it's
+# absent on clean checkouts. Tests that stage it skip rather than fail there;
+# they run wherever the fixture is present (the author's box, CI with data).
+_needs_fixture = pytest.mark.skipif(
+    not FIXTURE_CSV.exists(),
+    reason="Q4-2025 Menshikov fixture is private (gitignored); absent on clean checkouts",
+)
+
 
 def _make_submission(sid: str, quarter: str = "Q4-2025") -> Submission:
     return Submission(
@@ -45,6 +53,7 @@ def _stage_fixture(submissions_dir: Path, sid: str, quarter: str = "Q4-2025") ->
     return inbox
 
 
+@_needs_fixture
 def test_process_submission_produces_packet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -88,6 +97,7 @@ def test_process_submission_missing_inbox_raises(tmp_path: Path) -> None:
         process_submission(tmp_path, sub)
 
 
+@_needs_fixture
 def test_process_submission_writes_findings_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -123,6 +133,7 @@ def test_summarize_warnings_dedupes_and_filters_severity() -> None:
     assert all("OREGON_WMT" not in label for label in labels)
 
 
+@_needs_fixture
 def test_process_submission_invokes_agent_when_key_present(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,6 +177,7 @@ def test_process_submission_invokes_agent_when_key_present(
     assert "Anonymous submission OK" in review_text
 
 
+@_needs_fixture
 def test_process_submission_falls_back_when_agent_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
