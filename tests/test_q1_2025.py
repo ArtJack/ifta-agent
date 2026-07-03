@@ -1,8 +1,4 @@
-"""Validate the pipeline reproduces the Q1 2025 historical totals.
-
-Real-data regression — the Q1-2025 inbox is untracked PII, so this is skipped on
-a clean checkout. See `test_q2_2026_synthetic.py` for the hermetic equivalent.
-"""
+"""Validate the pipeline reproduces the Q1 2025 historical totals."""
 
 from pathlib import Path
 
@@ -13,14 +9,13 @@ from ifta.ingest import ingest_folder
 from ifta.rates import fetch_rates
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "inbox" / "Q1-2025" / "q1_2025_miles_and_fuel.xlsx"
+INBOX = ROOT / "inbox" / "Q1-2025"
 
-pytestmark = pytest.mark.skipif(
-    not FIXTURE.exists(),
-    reason="real Q1-2025 data is untracked PII; present only on the owner's machine",
+
+@pytest.mark.skipif(
+    not INBOX.exists(),
+    reason="inbox/Q1-2025 holds private client data (gitignored); absent on clean checkouts",
 )
-
-
 def test_q1_2025_totals() -> None:
     data = ingest_folder(ROOT / "inbox" / "Q1-2025")
     rates = fetch_rates("Q1-2025")
