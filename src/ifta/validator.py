@@ -78,6 +78,55 @@ def validate(data: CleanData, ret: IftaReturn) -> list[Finding]:
             )
         )
 
+    # ---- per-truck MPG plausibility ----
+    # The tax is computed on the FLEET average, so one truck's MPG being off
+    # does not by itself make the filed number wrong — that is why these are
+    # WARNINGs, not filing-blocking ERRORs (the fleet band above is the hard
+    # gate). But an individual truck outside the realistic band — or one with
+    # miles and no fuel at all — means that truck's rows are probably bad
+    # (missing fuel receipts, miles logged under the wrong unit, km vs miles),
+    # and those bad rows quietly distort the fleet average. Flag the specific
+    # truck so a human can verify before filing. Reuses the same physical band:
+    # a single heavy diesel tractor lives in the same 4.0–10.5 MPG range.
+    for truck in ret.trucks:
+        if truck.truck_id == "unknown":
+            # Catch-all bucket for unattributable rows — its MPG is not a
+            # per-vehicle metric, so plausibility bounds do not apply.
+            continue
+        if truck.miles > 0 and truck.gallons == 0:
+            findings.append(
+                Finding(
+                    "warning",
+                    "TRUCK_MPG_NO_FUEL",
+                    f"Truck {truck.truck_id} has {truck.miles:.0f} miles but no fuel recorded "
+                    "for the quarter — verify its fuel-card receipts (missing fuel inflates "
+                    "fleet MPG).",
+                    truck_id=truck.truck_id,
+                )
+            )
+        elif truck.miles > 0 and truck.gallons > 0 and truck.mpg < mpg_lo:
+            findings.append(
+                Finding(
+                    "warning",
+                    "TRUCK_MPG_LOW",
+                    f"Truck {truck.truck_id} MPG {truck.mpg:.2f} is below the realistic floor "
+                    f"of {mpg_lo} — likely missing miles or duplicate fuel entries for this "
+                    "truck. Verify before filing.",
+                    truck_id=truck.truck_id,
+                )
+            )
+        elif truck.miles > 0 and truck.gallons > 0 and truck.mpg > mpg_hi:
+            findings.append(
+                Finding(
+                    "warning",
+                    "TRUCK_MPG_HIGH",
+                    f"Truck {truck.truck_id} MPG {truck.mpg:.2f} is above the realistic ceiling "
+                    f"of {mpg_hi} — likely missing fuel purchases or duplicate mileage rows for "
+                    "this truck. Verify before filing.",
+                    truck_id=truck.truck_id,
+                )
+            )
+
     # ---- negative miles ----
     for mileage_record in data.miles:
         if mileage_record.miles < 0:
