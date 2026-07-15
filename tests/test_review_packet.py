@@ -87,6 +87,81 @@ def test_realistic_fleet_mpg_raises_no_mpg_finding() -> None:
     assert not any(f.code in {"MPG_HIGH", "MPG_LOW"} for f in findings)
 
 
+# ---------------------------------------------------------------------------
+# Per-truck MPG plausibility. Unlike the fleet band (a hard error), an outlier
+# truck is a WARNING: the filed number is still the fleet-average return, but
+# the truck's rows probably need a human look before filing.
+# ---------------------------------------------------------------------------
+
+
+def _two_truck_data(*, t2_miles: float, t2_gallons: float):
+    """Fleet with a healthy T1 (~6.7 MPG) plus a T2 whose miles/gallons the
+    caller controls, so T2's per-truck MPG can be pushed out of band while the
+    fleet average stays inside it (isolating the per-truck signal from the
+    fleet gate)."""
+    data = CleanData(
+        miles=[
+            MileageRecord("T1", "CA", 1_000),
+            MileageRecord("T2", "NV", t2_miles),
+        ],
+        fuel=[
+            FuelRecord("T1", "CA", 150),
+            FuelRecord("T2", "NV", t2_gallons),
+        ],
+    )
+    return data, compute_return(data, _rates())
+
+
+def test_per_truck_mpg_high_warns_without_blocking() -> None:
+    # T2: 300 mi / 20 gal = 15 MPG — impossible for one truck. Fleet stays in
+    # band (1,300 / 170 = 7.65), so this is a warning that names the specific
+    # truck, not a filing-blocking error.
+    data, ret = _two_truck_data(t2_miles=300, t2_gallons=20)
+    findings = validate(data, ret)
+
+    f = next(f for f in findings if f.code == "TRUCK_MPG_HIGH")
+    assert f.severity == "warning"
+    assert f.truck_id == "T2"
+    assert determine_filing_status(ret, findings)["status"] != "DO_NOT_FILE"
+
+
+def test_per_truck_mpg_low_warns_and_names_truck() -> None:
+    # T2: 100 mi / 80 gal = 1.25 MPG — below the floor for this truck.
+    data, ret = _two_truck_data(t2_miles=100, t2_gallons=80)
+    findings = validate(data, ret)
+
+    f = next(f for f in findings if f.code == "TRUCK_MPG_LOW")
+    assert f.severity == "warning"
+    assert f.truck_id == "T2"
+
+
+def test_per_truck_miles_without_fuel_warns() -> None:
+    # T2 drove but bought no fuel — MPG is undefined, so the band check can't
+    # run; flag the missing fuel explicitly (it inflates the fleet average).
+    # T2 miles kept at 500 so the fleet stays in band (1,500 / 150 = 10.0) and
+    # this test isolates the per-truck no-fuel signal.
+    data = CleanData(
+        miles=[MileageRecord("T1", "CA", 1_000), MileageRecord("T2", "NV", 500)],
+        fuel=[FuelRecord("T1", "CA", 150)],
+    )
+    ret = compute_return(data, _rates())
+    findings = validate(data, ret)
+
+    f = next(f for f in findings if f.code == "TRUCK_MPG_NO_FUEL")
+    assert f.severity == "warning"
+    assert f.truck_id == "T2"
+
+
+def test_healthy_trucks_raise_no_per_truck_mpg_finding() -> None:
+    # Both trucks ~6.7 MPG — nothing to flag.
+    data, ret = _two_truck_data(t2_miles=1_000, t2_gallons=150)
+    findings = validate(data, ret)
+    assert not any(
+        f.code in {"TRUCK_MPG_HIGH", "TRUCK_MPG_LOW", "TRUCK_MPG_NO_FUEL"}
+        for f in findings
+    )
+
+
 def test_filing_status_allows_warnings_but_not_clean_ready() -> None:
     ret = compute_return(_data(), _rates())
     findings = [Finding("warning", "FUEL_NO_MILES", "Fuel without miles.", state="OR")]
