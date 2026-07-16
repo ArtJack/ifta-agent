@@ -1,0 +1,79 @@
+name: Deploy to Azure
+
+# Builds the container image in Azure Container Registry and rolls the three
+# Container Apps (web / worker / telegram) to it. Authentication is GitHub OIDC
+# (federated credentials) — NO long-lived Azure credentials are stored in the
+# repo. One-time setup is documented in docs/AZURE.md:
+#   Repository secrets:   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   Repository variables: AZURE_RESOURCE_GROUP, AZURE_ACR_NAME, AZURE_APP_PREFIX
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'data/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-azure.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write # required for OIDC federated login
+  contents: read
+
+concurrency:
+  group: deploy-azure
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR: ${{ vars.AZURE_ACR_NAME }}
+      PREFIX: ${{ vars.AZURE_APP_PREFIX }}
+      IMAGE_REPO: ifta
+      TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC — no stored credentials)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build + push image (ACR Tasks — no Docker on the runner)
+        run: |
+          az acr build \
+            --registry "$ACR" \
+            --image "${IMAGE_REPO}:${TAG}" \
+            --image "${IMAGE_REPO}:latest" \
+            --file Dockerfile .
+
+      - name: Roll Container Apps to the new image
+        run: |
+          set -euo pipefail
+          LOGIN_SERVER="$(az acr show -n "$ACR" --query loginServer -o tsv)"
+          IMAGE="${LOGIN_SERVER}/${IMAGE_REPO}:${TAG}"
+          for app in "${PREFIX}-web" "${PREFIX}-worker" "${PREFIX}-telegram"; do
+            if az containerapp show -g "$RG" -n "$app" >/dev/null 2>&1; then
+              echo "Updating $app -> $IMAGE"
+              az containerapp update -g "$RG" -n "$app" --image "$IMAGE" -o none
+            else
+              echo "Skipping $app (not deployed)"
+            fi
+          done
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "### Deployed \`${IMAGE_REPO}:${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          WEB_FQDN="$(az containerapp show -g "$RG" -n "${PREFIX}-web" \
+            --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)"
+          if [ -n "${WEB_FQDN:-}" ]; then
+            echo "- Web: https://$WEB_FQDN" >> "$GITHUB_STEP_SUMMARY"
+          fi

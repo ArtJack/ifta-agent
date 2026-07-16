@@ -140,6 +140,68 @@ attention on the material exceptions, like a good auditor. Reproducible via
 > been overflowing the token budget and silently truncating to a deterministic-only packet —
 > caught by **measuring at scale, not guessing**, and fixed before it ever hit a real fleet.
 
+## ☁️ Production infrastructure on Azure
+
+The pipeline runs as a containerised, **infrastructure-as-code** deployment on Azure —
+the same code the Mac mini runs, flipped onto managed cloud services by a single
+environment variable, with the local deployment kept as a warm fallback.
+
+```mermaid
+flowchart TB
+  subgraph Client
+    U[Carrier]
+    TG[Telegram]
+  end
+  U -->|upload| V[Next.js · Vercel]
+  V -->|HTTPS| WEB
+  TG --> BOT
+
+  subgraph Azure["Azure — one resource group"]
+    subgraph ACA["Container Apps environment"]
+      WEB[ifta-web<br/>FastAPI · scale-to-zero]
+      WRK[ifta-worker<br/>queue drainer]
+      BOT[ifta-telegram<br/>intake bot]
+    end
+    PG[(PostgreSQL<br/>Flexible Server)]
+    FS[[Azure Files<br/>submissions · clients]]
+    KV[Key Vault]
+    ACR[(Container Registry)]
+    OBS[Log Analytics<br/>+ App Insights]
+  end
+
+  WEB -->|enqueue| PG
+  WRK -->|FOR UPDATE SKIP LOCKED| PG
+  WEB --- FS
+  WRK --- FS
+  BOT --- FS
+  WEB -. secrets .-> KV
+  WRK -. secrets .-> KV
+  BOT -. secrets .-> KV
+  ACR --> ACA
+  ACA --> OBS
+  WRK -->|Claude review| ANT[Anthropic API]
+  GH[GitHub Actions<br/>OIDC] -->|az acr build → update| ACR
+```
+
+The engineering choices worth talking about:
+
+- **One image, three roles** on **Azure Container Apps** — `web` (HTTPS ingress, scale-to-zero),
+  `worker` (a poller), and the `telegram` bot — each the same container with a different command.
+- **Pluggable persistence.** The job store is a facade: SQLite on the single host, **Azure
+  Database for PostgreSQL** in the cloud, chosen at runtime by one env var. The Postgres queue
+  claim uses `SELECT … FOR UPDATE SKIP LOCKED` for safe concurrent draining. All 429 tests keep
+  running on SQLite unchanged.
+- **Secrets never touch the image or env files** — they live in **Key Vault** and are read by a
+  **user-assigned managed identity** that also pulls the image from **Container Registry** (no
+  admin creds, no stored passwords).
+- **CI/CD with zero stored credentials** — **GitHub Actions via OIDC** federated identity builds
+  the image with ACR Tasks and rolls the revisions.
+- **Cost-governed by design** for a temporary credit: scale-to-zero web tier, a Burstable DB, and
+  a **Consumption Budget + alert** — ~$25–40/mo idle, and teardown is a single `az group delete`.
+- **All of it is code** — [`deploy/azure/main.bicep`](../deploy/azure/main.bicep) provisions the
+  whole stack; the full runbook (provision → secrets → cutover → teardown/rollback) is in
+  [`docs/AZURE.md`](../docs/AZURE.md).
+
 ## What's next
 
 Hosted vector DB for the rule base; surfacing the **benchmark history publicly** as a live eval
@@ -150,6 +212,10 @@ expanding the gold receipt set; and onboarding a second and third carrier.
 
 Python 3.12, Anthropic SDK, FastAPI, pandas, pdfplumber/openpyxl · Next.js 16 + TypeScript +
 Vercel · Cloudflare Tunnel + Turnstile, Resend, python-telegram-bot · pytest, ruff, mypy(strict).
+
+**Cloud (Azure):** Container Apps · Database for PostgreSQL (Flexible Server) · Azure Files ·
+Key Vault + managed identity · Container Registry · Log Analytics/Application Insights ·
+Bicep (IaC) · GitHub Actions (OIDC) · Consumption Budgets.
 
 ---
 
@@ -168,6 +234,10 @@ Vercel · Cloudflare Tunnel + Turnstile, Resend, python-telegram-bot · pytest, 
 - Designed a multi-tenant FastAPI + Next.js service with operator approval, magic-link auth,
   CAPTCHA, and rate limiting; deployed on a Mac mini via Cloudflare Tunnel + Vercel for ~$0
   infra.
+- **Containerised and deployed the service to Azure as infrastructure-as-code** — Container Apps
+  (web/worker/bot), managed PostgreSQL, Key Vault + managed identity, and a **credential-less
+  GitHub Actions OIDC pipeline** defined in Bicep — behind a runtime backend switch that keeps
+  SQLite and all 429 tests green, with a Consumption Budget guardrail for cost control.
 - Cut quarterly filing prep from hours of manual spreadsheet work to **minutes**, with
   risk-tiered model selection (Haiku/Sonnet/Opus) for cost control.
 
