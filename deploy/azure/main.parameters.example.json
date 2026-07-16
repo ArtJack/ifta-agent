@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "ifta" },
+    "location": { "value": "eastus" },
+    "deployTelegramBot": { "value": true },
+
+    "pgAdminLogin": { "value": "iftaadmin" },
+    "pgAdminPassword": { "value": "REPLACE-WITH-STRONG-PASSWORD" },
+    "pgDatabaseName": { "value": "ifta" },
+
+    "publicBaseUrl": { "value": "https://ifta-api.artjeck.com" },
+    "corsOrigins": { "value": "https://artjeck.com,https://www.artjeck.com" },
+    "resendFromEmail": { "value": "ArtJeck IFTA <ifta@artjeck.com>" },
+    "adminBcc": { "value": "" },
+    "telegramAdminUserIds": { "value": "" },
+    "telegramAdminChatId": { "value": "" },
+    "agentModel": { "value": "claude-sonnet-4-6" },
+    "agentEffort": { "value": "medium" },
+
+    "monthlyBudget": { "value": 75 },
+    "alertEmail": { "value": "REPLACE-WITH-YOUR-EMAIL" },
+    "budgetStartDate": { "value": "2026-07-01" },
+
+    "deployerPrincipalId": { "value": "REPLACE-WITH: az ad signed-in-user show --query id -o tsv" },
+
+    "_comment_secrets": "The 5 secrets below default to a KeyVault sentinel so a first deploy works. Either pass real values here (they land in deployment history) OR leave them and run `az keyvault secret set` after deploy (preferred).",
+    "anthropicApiKey": { "value": "REPLACE-IN-KEYVAULT" },
+    "resendApiKey": { "value": "REPLACE-IN-KEYVAULT" },
+    "turnstileSecretKey": { "value": "REPLACE-IN-KEYVAULT" },
+    "iftaWebBackendKey": { "value": "REPLACE-IN-KEYVAULT" },
+    "telegramBotToken": { "value": "REPLACE-IN-KEYVAULT" }
+  }
+}
