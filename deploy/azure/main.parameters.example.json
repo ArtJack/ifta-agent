@@ -25,7 +25,6 @@
 
     "deployerPrincipalId": { "value": "REPLACE-WITH: az ad signed-in-user show --query id -o tsv" },
 
-    "_comment_secrets": "The 5 secrets below default to a KeyVault sentinel so a first deploy works. Either pass real values here (they land in deployment history) OR leave them and run `az keyvault secret set` after deploy (preferred).",
     "anthropicApiKey": { "value": "REPLACE-IN-KEYVAULT" },
     "resendApiKey": { "value": "REPLACE-IN-KEYVAULT" },
     "turnstileSecretKey": { "value": "REPLACE-IN-KEYVAULT" },

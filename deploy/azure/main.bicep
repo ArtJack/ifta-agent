@@ -32,6 +32,12 @@
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
+@description('Region for PostgreSQL. Some subscriptions are offer-restricted for Flexible Server in the primary region (e.g. eastus) — override to a permitted region. Cross-region to the apps is fine: the AllowAzureServices firewall + SSL still apply.')
+param pgLocation string = location
+
+@description('Optional salt appended to the Postgres server name. Use only to sidestep a phantom name-lock: a failed create in a restricted region leaves the deterministic name bound to that location at the ARM placement layer, blocking recreation elsewhere.')
+param pgNameSalt string = ''
+
 @description('Short prefix for resource names (lowercase letters/digits).')
 @minLength(3)
 @maxLength(11)
@@ -39,6 +45,9 @@ param namePrefix string = 'ifta'
 
 @description('Deploy the Telegram intake bot as a third container app.')
 param deployTelegramBot bool = true
+
+@description('Create the three container apps. Set false for a first-pass infra deploy (registry/DB/vault/etc.) before the image exists, then true once the image is pushed — Container Apps fails to provision against a missing image, so the registry must be populated first.')
+param deployContainerApps bool = true
 
 @description('Container image repository name inside ACR.')
 param imageRepository string = 'ifta'
@@ -139,7 +148,7 @@ var saName = take(toLower('${namePrefix}st${suffix}'), 24)
 var logName = '${namePrefix}-logs'
 var appiName = '${namePrefix}-appi'
 var envName = '${namePrefix}-cae'
-var pgName = toLower('${namePrefix}-pg-${suffix}')
+var pgName = toLower('${namePrefix}-pg-${suffix}${pgNameSalt}')
 var uamiName = '${namePrefix}-app-identity'
 var image = '${acr.properties.loginServer}/${imageRepository}:${imageTag}'
 
@@ -282,7 +291,7 @@ resource secDbUrl 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: pgName
-  location: location
+  location: pgLocation
   tags: tags
   sku: { name: 'Standard_B1ms', tier: 'Burstable' }
   properties: {
@@ -427,7 +436,7 @@ var coreDependencies = [acrPull, kvSecretsUser, secAnthropic, secResend, secTurn
 
 // --------------------------------- Web app -----------------------------------
 
-resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource webApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContainerApps) {
   name: '${namePrefix}-web'
   location: location
   tags: tags
@@ -497,7 +506,7 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
 // -------------------------------- Worker app ---------------------------------
 // No ingress; a continuous poller, so pinned to exactly one always-on replica.
 
-resource workerApp 'Microsoft.App/containerApps@2024-03-01' = {
+resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContainerApps) {
   name: '${namePrefix}-worker'
   location: location
   tags: tags
@@ -537,7 +546,7 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = {
 // single file under data/ and needs the env-override added in Phase 3 to
 // persist across restarts — tracked, not yet wired here.
 
-resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployTelegramBot) {
+resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContainerApps && deployTelegramBot) {
   name: '${namePrefix}-telegram'
   location: location
   tags: tags
@@ -622,7 +631,7 @@ resource budget 'Microsoft.Consumption/budgets@2023-11-01' = {
 
 // -------------------------------- Outputs ------------------------------------
 
-output webUrl string = 'https://${webApp.properties.configuration.ingress.fqdn}'
+output webUrl string = deployContainerApps ? 'https://${webApp!.properties.configuration.ingress.fqdn}' : ''
 output acrLoginServer string = acr.properties.loginServer
 output acrName string = acr.name
 output keyVaultName string = kv.name

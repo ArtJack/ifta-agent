@@ -79,10 +79,18 @@ az deployment group validate -g rg-ifta -f deploy/azure/main.bicep \
   -p @deploy/azure/main.parameters.json \
   -p deployerPrincipalId="$MY_OID" pgAdminPassword="$PG_PW"
 
-# Deploy
-az deployment group create -g rg-ifta -f deploy/azure/main.bicep \
+# Phase 1 — infra + database, with the container apps OFF (their image doesn't
+# exist yet, and Container Apps fails to provision against a missing image).
+az deployment group create -g rg-ifta -n main -f deploy/azure/main.bicep \
   -p @deploy/azure/main.parameters.json \
-  -p deployerPrincipalId="$MY_OID" pgAdminPassword="$PG_PW"
+  -p deployerPrincipalId="$MY_OID" pgAdminPassword="$PG_PW" \
+     deployContainerApps=false
+
+# If Postgres fails with LocationIsOfferRestricted (common on new/credit
+# subscriptions — it can affect several regions), pick a permitted region and
+# re-run, adding:  pgLocation=westus3 pgNameSalt=r2
+# Bump pgNameSalt on each retry: a failed create leaves a phantom name-lock on
+# the deterministic server name, which a new salt sidesteps.
 ```
 
 Capture the outputs — you'll need them below:
@@ -92,9 +100,9 @@ az deployment group show -g rg-ifta -n main --query properties.outputs
 # -> acrName, keyVaultName, webUrl, postgresFqdn, managedIdentityClientId, ...
 ```
 
-> First deploy note: the container apps reference an image that doesn't exist in
-> ACR yet, so their revisions are **unhealthy until step 4**. That's expected —
-> the infra itself provisions cleanly.
+> This first pass creates everything **except** the three container apps
+> (registry, database, vault, storage, environment, identity, budget). You build
+> the image next, then bring the apps up in step 4 with `deployContainerApps=true`.
 
 ---
 
@@ -160,23 +168,36 @@ Then in the GitHub repo settings:
 
 ---
 
-## 4. First image build + deploy
+## 4. Build the image, then bring up the apps
 
-Trigger the workflow (Actions → **Deploy to Azure** → Run workflow), or do it
-manually once:
+Build the image into ACR (what the apps pull), then re-run the deployment with
+`deployContainerApps=true` (the default) to create the three apps:
 
 ```bash
-ACR="$(az deployment group show -g rg-ifta -n main --query properties.outputs.acrName.value -o tsv)"
-az acr build --registry "$ACR" --image ifta:bootstrap --image ifta:latest --file Dockerfile .
+ACR="$(az acr list -g rg-ifta --query "[0].name" -o tsv)"
 
-LOGIN="$(az acr show -n "$ACR" --query loginServer -o tsv)"
-for app in ifta-web ifta-worker ifta-telegram; do
-  az containerapp show -g rg-ifta -n "$app" >/dev/null 2>&1 \
-    && az containerapp update -g rg-ifta -n "$app" --image "$LOGIN/ifta:latest"
-done
+# Build + push (ACR Tasks — no local Docker needed)
+az acr build --registry "$ACR" --image ifta:latest --file Dockerfile .
+
+# Phase 2 — same command as phase 1 but with the apps ON. Pass the SAME
+# pgLocation / pgNameSalt you used in phase 1 so the database isn't recreated.
+az deployment group create -g rg-ifta -n main -f deploy/azure/main.bicep \
+  -p @deploy/azure/main.parameters.json \
+  -p deployerPrincipalId="$MY_OID" pgAdminPassword="$PG_PW"
+#    ...plus any pgLocation=... pgNameSalt=... from phase 1
+
+# Web URL:
+az deployment group show -g rg-ifta -n main --query properties.outputs.webUrl.value -o tsv
 ```
 
-The revisions should now go healthy.
+> **Ordering:** this phase-2 run reseeds the placeholder Key Vault secrets, so do
+> **step 2 (set real secrets) after this**, then restart the revisions so they
+> pick the real values up:
+> `for a in ifta-web ifta-worker ifta-telegram; do az containerapp revision restart -g rg-ifta -n $a --revision "$(az containerapp revision list -g rg-ifta -n $a --query '[0].name' -o tsv)"; done`
+
+After this one-time manual pass, day-to-day deploys are just the GitHub Actions
+pipeline (build → `containerapp update`), which never re-runs the template and so
+never touches your secrets.
 
 ---
 
