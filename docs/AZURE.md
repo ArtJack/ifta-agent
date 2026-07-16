@@ -116,6 +116,11 @@ az keyvault secret set --vault-name "$KV" -n telegram-bot-token   --value "12345
 `ifta-web-db-url` was already built from the Postgres FQDN + password — don't
 overwrite it.
 
+> **Note:** re-running `az deployment group create` reseeds these five secrets
+> back to their placeholder, so re-run the `secret set` commands after any infra
+> redeploy. The CI pipeline only builds images and calls `containerapp update`,
+> so day-to-day deploys never touch your secrets.
+
 ---
 
 ## 3. Set up GitHub OIDC for CI

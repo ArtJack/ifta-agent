@@ -87,22 +87,27 @@ param agentEffort string = 'medium'
 //     succeeds; set the real values with `az keyvault secret set` afterwards. ---
 @description('Anthropic API key (LLM review agent).')
 @secure()
+#disable-next-line secure-parameter-default
 param anthropicApiKey string = 'REPLACE-IN-KEYVAULT'
 
 @description('Resend API key (outbound email).')
 @secure()
+#disable-next-line secure-parameter-default
 param resendApiKey string = 'REPLACE-IN-KEYVAULT'
 
 @description('Cloudflare Turnstile secret key (CAPTCHA verification).')
 @secure()
+#disable-next-line secure-parameter-default
 param turnstileSecretKey string = 'REPLACE-IN-KEYVAULT'
 
 @description('Shared key the Vercel frontend uses to authenticate to the backend.')
 @secure()
+#disable-next-line secure-parameter-default
 param iftaWebBackendKey string = 'REPLACE-IN-KEYVAULT'
 
 @description('Telegram bot token from BotFather.')
 @secure()
+#disable-next-line secure-parameter-default
 param telegramBotToken string = 'REPLACE-IN-KEYVAULT'
 
 // --- Budget / cost guardrail ---
