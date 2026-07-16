@@ -143,13 +143,18 @@ RG_ID="$(az group show -n rg-ifta --query id -o tsv)"
 APP_ID="$(az ad app create --display-name ifta-github-oidc --query appId -o tsv)"
 az ad sp create --id "$APP_ID"
 
-# Federated credential: trust GitHub Actions on main.
+# Federated credential. The workflow job runs with `environment: production`, so
+# GitHub's OIDC token subject is  repo:OWNER/REPO:environment:production  (NOT the
+# branch ref) — the credential subject MUST match this exactly or auth fails.
 az ad app federated-credential create --id "$APP_ID" --parameters "{
-  \"name\": \"github-main\",
+  \"name\": \"github-env-production\",
   \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:${REPO}:ref:refs/heads/main\",
+  \"subject\": \"repo:${REPO}:environment:production\",
   \"audiences\": [\"api://AzureADTokenExchange\"]
 }"
+
+# The environment the workflow references (also auto-created on first run):
+gh api --method PUT "/repos/${REPO}/environments/production"
 
 # Contributor on the resource group covers `az acr build` + `containerapp update`.
 az role assignment create --assignee "$APP_ID" --role Contributor --scope "$RG_ID"
