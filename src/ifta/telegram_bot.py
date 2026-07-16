@@ -228,7 +228,15 @@ def load_bot_config(project_root: Path = PROJECT_ROOT) -> BotConfig:
 
 
 def telegram_access_path(project_root: Path) -> Path:
-    """Local runtime allowlist written by /approve; intentionally git-ignored."""
+    """Local runtime allowlist written by /approve; intentionally git-ignored.
+
+    Honors ``IFTA_TELEGRAM_ACCESS_FILE`` so the file can live on a mounted
+    volume (Azure Files) that persists across container restarts. Falls back to
+    ``<project_root>/data/telegram_access.json`` for the single-host deployment.
+    """
+    override = os.getenv("IFTA_TELEGRAM_ACCESS_FILE")
+    if override:
+        return Path(override)
     return project_root / TELEGRAM_ACCESS_FILE
 
 
