@@ -37,6 +37,12 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+# Azure production runtime. psycopg[binary] bundles libpq (no system libpq
+# needed), enabling the Postgres job-state backend selected by IFTA_WEB_DB_URL.
+# Purely additive: unset the URL and the app still uses SQLite (Mac mini / local).
+azure = [
+    "psycopg[binary]>=3.2",
+]
 
 [project.scripts]
 ifta = "ifta.cli:main"

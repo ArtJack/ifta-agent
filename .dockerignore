@@ -1,0 +1,54 @@
+# Keep the image lean and PII-free. Only src/, pyproject, README, and tracked
+# non-PII data land in the build context.
+
+# VCS / tooling
+.git
+.gitignore
+.claude
+.vscode
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+*.egg-info
+build
+dist
+
+# Not needed at runtime
+tests
+docs
+evals
+notebooks
+ifta-portfolio
+deploy
+scripts
+
+# Secrets never enter the image (supplied via Key Vault -> Container Apps env)
+.env
+.env.local
+*.pem
+*.key
+
+# Runtime state + PII — supplied by Azure Files mounts / Postgres in production,
+# never baked into the image.
+data/web_jobs.db
+data/web_jobs.db-*
+data/web_submissions
+data/traces
+data/telegram_access.json
+data/clients
+
+# Local scratch / logs
+logs
+tmp
+scratch
+inbox/*/
+outputs/*/
+*.log
+.DS_Store
