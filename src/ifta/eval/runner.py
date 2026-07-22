@@ -146,6 +146,18 @@ class CaseResult:
         return sum(1 for a in self.assertions if not a.passed)
 
 
+def _mentions_amount(text: str, expected: float) -> bool:
+    """True if `text` contains `expected` as a standalone numeric token.
+
+    Comparing whole tokens (not a bare substring search) avoids a false-green
+    where `str(expected)` matches the wrong number — e.g. expected 795 found
+    inside "7950" or "1795.16". Tolerates surrounding $ , . and parentheses.
+    """
+    targets = {f"{expected:.2f}", str(expected)}
+    tokens = {t.strip(",$.()") for t in text.replace(",", "").split()}
+    return bool(targets & tokens)
+
+
 def grade_assertions(
     assertions: dict[str, Any],
     *,
@@ -187,18 +199,11 @@ def grade_assertions(
         summary_text = note.summary or ""
         if "total_tax_due" in assertions:
             expected = assertions["total_tax_due"]
-            # Search the summary for the numeric value (allowing commas + $).
-            tokens = [
-                t.strip(",$.")
-                for t in summary_text.replace(",", "").split()
-            ]
-            ok = any(t == f"{expected:.2f}" or t == str(expected) for t in tokens)
-            if not ok:
-                # Also search whole response (review notes sometimes put it in issues).
-                ok = (
-                    f"{expected:.2f}" in response_text
-                    or str(expected) in response_text
-                )
+            # Match the value as a standalone token in the summary, falling back
+            # to the whole response (review notes sometimes put it in an issue).
+            ok = _mentions_amount(summary_text, expected) or _mentions_amount(
+                response_text, expected
+            )
             results.append(
                 AssertionResult(
                     name=f"total_tax_due={expected}",

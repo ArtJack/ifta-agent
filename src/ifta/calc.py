@@ -27,6 +27,17 @@ def _round_half_up(value: float, ndigits: int = 2) -> float:
     return float(Decimal(str(value)).quantize(q, rounding=ROUND_HALF_UP))
 
 
+def _round_half_up_int(value: float) -> int:
+    """Round to a whole number, halves up (0.5→1, 2.5→3).
+
+    Python's builtin round() uses banker's rounding (round-half-to-even), which
+    diverges from the IFTA portal on exact .5 boundaries. Gallons print as whole
+    numbers on the return, so they must use the same half-up rule as the dollar
+    amounts (see _tax) rather than builtin round().
+    """
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def _tax(net_gal: float, rate: float) -> float:
     """Compute tax = net_gal * rate using exact decimal arithmetic, then
     round half-up to 2 decimals. Matches CDTFA portal math exactly.
@@ -34,7 +45,7 @@ def _tax(net_gal: float, rate: float) -> float:
     Float multiplication (39 * 0.2850 == 11.114999...) loses the half-cent;
     converting both operands to Decimal first preserves it.
     """
-    result = Decimal(str(int(round(net_gal)))) * Decimal(str(rate))
+    result = Decimal(str(_round_half_up_int(net_gal))) * Decimal(str(rate))
     return float(result.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
@@ -138,8 +149,8 @@ def compute_per_truck_lines(
         for s in states:
             miles = miles_by_tk_st.get((truck_id, s), 0.0)
             tax_paid_gal = gallons_by_tk_st.get((truck_id, s), 0.0)
-            taxable_gal = round(miles / fleet_mpg) if fleet_mpg else 0.0
-            net = taxable_gal - round(tax_paid_gal)
+            taxable_gal = _round_half_up_int(miles / fleet_mpg) if fleet_mpg else 0
+            net = taxable_gal - _round_half_up_int(tax_paid_gal)
             if s not in IFTA_JURISDICTIONS:
                 rate = 0.0
                 tax_due = 0.0
@@ -217,12 +228,12 @@ def compute_return(data: CleanData, rates: RateTable) -> IftaReturn:
     for s in all_states:
         miles = miles_by_state.get(s, 0.0)
         tax_paid_gal = gallons_by_state.get(s, 0.0)
-        # The IFTA portal rounds taxable gallons to whole gallons (verified
-        # against MENSHIKOV LLC Q4 2025 CDTFA filing).
-        taxable_gal = round(miles / fleet_mpg) if fleet_mpg else 0.0
+        # The IFTA portal rounds taxable gallons to whole gallons, half-up
+        # (verified against MENSHIKOV LLC Q4 2025 CDTFA filing).
+        taxable_gal = _round_half_up_int(miles / fleet_mpg) if fleet_mpg else 0
         # Tax-paid gallons are also rounded for portal display, but we keep
         # 3-decimal precision internally and round only when reporting.
-        net = taxable_gal - round(tax_paid_gal)
+        net = taxable_gal - _round_half_up_int(tax_paid_gal)
         if s not in IFTA_JURISDICTIONS:
             rate = 0.0
             tax_due = 0.0

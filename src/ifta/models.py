@@ -64,9 +64,12 @@ CA_PROVINCES: frozenset[str] = frozenset(
 )
 JURISDICTIONS: frozenset[str] = US_STATES | CA_PROVINCES
 
-# States that DO participate in IFTA fuel-tax filing.
-# AK, HI, DC, and the three territories are non-IFTA and are excluded from filings.
-NON_IFTA: frozenset[str] = frozenset({"AK", "HI", "DC"})
+# Jurisdictions that do NOT participate in IFTA fuel-tax filing, so they carry no
+# tax rate and are excluded from the taxable lines. AK, HI, DC plus the three
+# Canadian territories — Yukon (YT), Northwest Territories (NT), Nunavut (NU) —
+# are not IFTA members. Mirrors data/regulations.json
+# special_states.non_ifta_jurisdictions; keep the two in sync.
+NON_IFTA: frozenset[str] = frozenset({"AK", "HI", "DC", "YT", "NT", "NU"})
 IFTA_JURISDICTIONS: frozenset[str] = JURISDICTIONS - NON_IFTA
 
 
