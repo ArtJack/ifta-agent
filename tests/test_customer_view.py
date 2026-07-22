@@ -227,6 +227,33 @@ def test_rate_warning_shown_prominently() -> None:
     assert "We found issues" in body
 
 
+def test_do_not_file_email_never_says_packet_is_ready() -> None:
+    """A blocked packet must not announce itself as 'ready' — that contradicts
+    the 'please don't file yet' line and can lead to filing a flagged return.
+    Mirrors the DM EXPRESS MPG-high case (fleet MPG above the realistic band)."""
+    note = SimpleNamespace(
+        filing_status="DO_NOT_FILE",
+        issues=[
+            {
+                "severity": "error",
+                "code": "MPG_HIGH",
+                "claim": "Fleet MPG of 10.86 is above the realistic ceiling — fuel is likely missing.",
+            }
+        ],
+        next_steps=[],
+    )
+    text = render_customer_view(sub=_sub(), ret=_ret(mpg=10.86), note=note)
+    html = render_customer_view_html(sub=_sub(), ret=_ret(mpg=10.86), note=note)
+
+    for body in (text, html):
+        assert "packet is ready" not in body
+        assert "needs another look before you can file" in body
+        # The action heading must not imply filing is the next step.
+        assert "Before you file, please double-check" not in body
+        assert "Please resolve these before filing" in body
+        assert "don't file yet" in body
+
+
 # ─── full regression on dev-markup leakage ───────────────────────────────────
 
 

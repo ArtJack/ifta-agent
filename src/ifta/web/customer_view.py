@@ -126,10 +126,9 @@ def render_customer_view(
     the real attachment filenames so the list shows e.g. 'truck_55.xlsx'.
     """
     greeting = f"Hi {sub.name}," if sub.name else "Hi,"
-    status_blurb = _status_blurb(note)
 
     lines: list[str] = [greeting, ""]
-    lines.append(f"Your {sub.quarter} IFTA packet is ready. {status_blurb}")
+    lines.append(_lead_sentence(sub.quarter, note))
     lines.append("")
     lines.append(f"Total tax due: ${ret.total_tax_due:,.2f}")
     lines.append(f"Fleet MPG: {ret.fleet_mpg:.2f}")
@@ -137,7 +136,7 @@ def render_customer_view(
 
     actions = _collect_actions(note=note, findings=findings)
     if actions:
-        lines.append("Before you file, please double-check:")
+        lines.append(_actions_heading(note))
         for a in actions:
             lines.append(f"• {a.text}")
         lines.append("")
@@ -178,9 +177,15 @@ def render_customer_view_html(
     actions = _collect_actions(note=note, findings=findings)
 
     p: list[str] = [f'<p style="margin:0 0 16px">{greeting}</p>']
+    _quarter_html = f"<strong>{esc(sub.quarter)}</strong>"
+    _tail = (
+        "packet needs another look before you can file."
+        if _filing_status(note) == "DO_NOT_FILE"
+        else "packet is ready."
+    )
     p.append(
-        f'<p style="margin:0 0 16px">Your <strong>{esc(sub.quarter)}</strong> IFTA '
-        f"packet is ready. {esc(_status_blurb(note))}</p>"
+        f'<p style="margin:0 0 16px">Your {_quarter_html} IFTA '
+        f"{_tail} {esc(_status_blurb(note))}</p>"
     )
     p.append(
         '<table role="presentation" cellpadding="0" cellspacing="0" '
@@ -192,7 +197,7 @@ def render_customer_view_html(
         "</table>"
     )
     if actions:
-        p.append('<p style="margin:0 0 8px;font-weight:600">Before you file, please double-check:</p>')
+        p.append(f'<p style="margin:0 0 8px;font-weight:600">{esc(_actions_heading(note))}</p>')
         p.append('<ul style="margin:0 0 20px;padding-left:22px">')
         p += [f'<li style="margin:0 0 6px">{esc(a.text)}</li>' for a in actions]
         p.append("</ul>")
@@ -232,6 +237,31 @@ def _status_blurb(note: Any | None) -> str:
         return "Please review the attached files before filing."
     status = getattr(note, "filing_status", None) or ""
     return _FILING_STATUS_LINE.get(status, "Please review the attached files before filing.")
+
+
+def _filing_status(note: Any | None) -> str:
+    """The deterministic filing status string, or '' when unknown."""
+    return (getattr(note, "filing_status", None) or "") if note is not None else ""
+
+
+def _lead_sentence(quarter: str, note: Any | None) -> str:
+    """Opening line for the packet email.
+
+    A DO_NOT_FILE packet must never be announced as 'ready' — that contradicts
+    the very next sentence and can lead a customer to file a return we've
+    flagged as wrong (e.g. an implausible fleet MPG from missing fuel).
+    """
+    blurb = _status_blurb(note)
+    if _filing_status(note) == "DO_NOT_FILE":
+        return f"Your {quarter} IFTA packet needs another look before you can file. {blurb}"
+    return f"Your {quarter} IFTA packet is ready. {blurb}"
+
+
+def _actions_heading(note: Any | None) -> str:
+    """Heading above the action bullets — 'before you file' implies filing is OK."""
+    if _filing_status(note) == "DO_NOT_FILE":
+        return "Please resolve these before filing:"
+    return "Before you file, please double-check:"
 
 
 def _collect_actions(
@@ -380,7 +410,12 @@ def render_customer_summary(
     # ── Problems / things to check ─────────────────────────────────────────
     problems = _structured_problems(note=note, findings=findings)
     if problems:
-        lines.append("## Things to double-check before filing")
+        _problems_heading = (
+            "Resolve these before filing"
+            if _filing_status(note) == "DO_NOT_FILE"
+            else "Things to double-check before filing"
+        )
+        lines.append(f"## {_problems_heading}")
         lines.append("")
         for p in problems:
             lines.append(f"### {p['headline']}")
@@ -893,7 +928,12 @@ def _build_summary_flowables(
 
     problems = _structured_problems(note=note, findings=findings)
     if problems:
-        flow.append(Paragraph("Things to double-check before filing", s["h2"]))
+        _pdf_problems_heading = (
+            "Resolve these before filing"
+            if _filing_status(note) == "DO_NOT_FILE"
+            else "Things to double-check before filing"
+        )
+        flow.append(Paragraph(_pdf_problems_heading, s["h2"]))
         for p in problems:
             flow.append(Paragraph(_pdf_escape(p["headline"]), s["h3"]))
             if p["detail"]:
