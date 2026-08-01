@@ -91,20 +91,89 @@ def test_process_one_job_pipeline_error_path(
     assert failures == [("bad", "bad uploads")]
 
 
-def test_process_one_job_unexpected_error_marks_failed(
+def test_process_one_job_unexpected_error_requeues_for_retry(
     db_path: Path, submissions_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An unexpected error is assumed transient and retried.
+
+    The customer can do nothing about a rate-site outage or a model API blip;
+    failing immediately would email them to re-upload perfectly good files.
+    """
     _create_queued(db_path, "boom")
 
     def fake_process(_subs_dir: Path, _sub: Submission) -> Path:
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(worker, "process_submission", fake_process)
-    sub_out = worker.process_one_job(db_path, submissions_dir)
+
+    failures: list[tuple[str, str]] = []
+    sub_out = worker.process_one_job(
+        db_path,
+        submissions_dir,
+        on_failure=lambda s, msg: failures.append((s.id, msg)),
+    )
     assert sub_out is not None
-    assert sub_out.status == SubmissionStatus.FAILED
-    assert sub_out.error is not None
-    assert "kaboom" in sub_out.error
+    assert sub_out.status == SubmissionStatus.QUEUED, "should go back on the queue"
+    assert sub_out.attempts == 1
+    assert not failures, "customer must not be emailed while retries remain"
+
+
+def test_process_one_job_fails_after_exhausting_retries(
+    db_path: Path, submissions_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retries are bounded — a permanently broken job still terminates."""
+    _create_queued(db_path, "boom")
+
+    def fake_process(_subs_dir: Path, _sub: Submission) -> Path:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(worker, "process_submission", fake_process)
+
+    failures: list[tuple[str, str]] = []
+    statuses = []
+    for _ in range(4):
+        out = worker.process_one_job(
+            db_path,
+            submissions_dir,
+            on_failure=lambda s, msg: failures.append((s.id, msg)),
+            max_attempts=3,
+        )
+        if out is None:
+            break
+        statuses.append(out.status)
+
+    assert statuses[-1] == SubmissionStatus.FAILED
+    assert statuses.count(SubmissionStatus.QUEUED) == 2, "2 retries, then give up"
+    assert len(failures) == 1, "customer told exactly once, at the end"
+    final = db.get_submission(db_path, "boom")
+    assert final is not None
+    assert final.attempts == 3
+    assert final.error is not None and "kaboom" in final.error
+
+
+def test_pipeline_error_is_terminal_and_not_retried(
+    db_path: Path, submissions_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A customer-actionable failure must not be retried — the files won't
+    fix themselves, and the customer needs to hear about it immediately."""
+    from ifta.web.pipeline import PipelineError
+
+    _create_queued(db_path, "badfiles")
+
+    def fake_process(_subs_dir: Path, _sub: Submission) -> Path:
+        raise PipelineError("your mileage file has no state column")
+
+    monkeypatch.setattr(worker, "process_submission", fake_process)
+
+    failures: list[tuple[str, str]] = []
+    out = worker.process_one_job(
+        db_path,
+        submissions_dir,
+        on_failure=lambda s, msg: failures.append((s.id, msg)),
+    )
+    assert out is not None
+    assert out.status == SubmissionStatus.FAILED
+    assert len(failures) == 1
 
 
 def test_claim_next_queued_marks_running(db_path: Path) -> None:
@@ -223,8 +292,11 @@ def test_run_forever_reaps_on_startup(
     submissions_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """run_forever calls the reaper before entering the loop, firing
-    on_failure callbacks for orphans (bug_004 + merged_bug_009 surfacing)."""
+    """run_forever reaps orphans before entering the loop.
+
+    A crashed worker is not the customer's fault, so an orphan with retries
+    left is requeued rather than failed; only an exhausted one notifies.
+    """
     import sqlite3
     from datetime import UTC, datetime, timedelta
 
@@ -253,11 +325,32 @@ def test_run_forever_reaps_on_startup(
         submissions_dir,
         on_failure=lambda s, msg: failures.append((s.id, msg)),
     )
+    # One attempt spent, retries remain → back on the queue, customer silent.
+    assert failures == []
+    fetched = db.get_submission(db_path, "ghost")
+    assert fetched is not None
+    assert fetched.status == SubmissionStatus.QUEUED
+    assert fetched.attempts == 1
+
+    # With retries exhausted, the same orphan becomes a real failure.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE submissions SET status = 'running', started_at = ?, attempts = 3"
+            " WHERE id = ?",
+            (long_ago, "ghost"),
+        )
+        conn.commit()
+
+    worker.run_forever(
+        db_path,
+        submissions_dir,
+        on_failure=lambda s, msg: failures.append((s.id, msg)),
+    )
     assert len(failures) == 1
     assert failures[0][0] == "ghost"
     fetched = db.get_submission(db_path, "ghost")
     assert fetched is not None
-    assert fetched.status.value == "failed"
+    assert fetched.status == SubmissionStatus.FAILED
 
 
 def test_mark_failed_truncates_long_errors(db_path: Path) -> None:

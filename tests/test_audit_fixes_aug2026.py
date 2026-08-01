@@ -422,3 +422,103 @@ def test_every_customer_path_uses_the_shared_core() -> None:
             f"{mod.__name__} calls ingest_folder directly — it would miss "
             "preflight's dedup. Use compute_quarter()."
         )
+
+
+# ── telegram: one customer's /process must not freeze the bot ───────────────
+
+
+def test_build_application_enables_concurrent_updates() -> None:
+    """Without this, PTB awaits each update to completion — so one /process
+    (pipeline + LLM review, minutes) blocks every other customer's messages,
+    and a user repeating /process can stall the bot indefinitely."""
+    from ifta.telegram_bot import BotConfig, build_application
+
+    config = BotConfig(
+        token="123456:ABCdefGHIjklMNOpqrsTUVwxyz",
+        project_root=Path("/tmp/ifta-test-root"),
+    )
+    app = build_application(config)
+    assert app.update_processor.max_concurrent_updates > 1
+
+
+def test_client_lock_is_per_client_and_serializes() -> None:
+    """The inbox is per-client while sessions are per-user, so two approved
+    users of one carrier could otherwise process the same quarter at once and
+    write over each other's outputs."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from ifta.telegram_bot import _client_lock
+
+    ctx = SimpleNamespace(application=SimpleNamespace(bot_data={}))
+
+    async def scenario() -> None:
+        a1 = _client_lock(ctx, "acme")
+        a2 = _client_lock(ctx, "acme")
+        other = _client_lock(ctx, "other_co")
+        assert a1 is a2, "same client must share one lock"
+        assert a1 is not other, "different clients must not block each other"
+
+        order: list[str] = []
+
+        async def worker(tag: str) -> None:
+            async with a1:
+                order.append(f"{tag}-start")
+                await asyncio.sleep(0.01)
+                order.append(f"{tag}-end")
+
+        await asyncio.gather(worker("first"), worker("second"))
+        # Serialized: one finishes before the other starts.
+        assert order in (
+            ["first-start", "first-end", "second-start", "second-end"],
+            ["second-start", "second-end", "first-start", "first-end"],
+        ), order
+
+    asyncio.run(scenario())
+
+
+def test_offload_runs_off_the_event_loop_thread() -> None:
+    """Blocking work must leave the loop free; a sync call inline would freeze
+    every other customer's updates for its duration."""
+    import asyncio
+    import threading
+
+    from ifta.telegram_bot import _offload
+
+    async def scenario() -> None:
+        loop_thread = threading.current_thread().name
+        seen = await _offload(lambda: threading.current_thread().name)
+        assert seen != loop_thread, "call should have run in a worker thread"
+
+        # Best-effort semantics preserved: a failure returns None, not a raise.
+        def boom() -> None:
+            raise RuntimeError("resend is down")
+
+        assert await _offload(boom) is None
+
+    asyncio.run(scenario())
+
+
+def test_admin_notify_never_raises_into_the_handler() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from ifta.telegram_bot import _safe_admin_notify
+
+    calls: list[str] = []
+
+    def boom(_event: object) -> None:
+        calls.append("attempted")
+        raise RuntimeError("telegram unreachable")
+
+    notifier = SimpleNamespace(send=boom)
+
+    asyncio.run(
+        _safe_admin_notify(
+            notifier,  # type: ignore[arg-type]
+            headline="x",
+            source="telegram bot",
+            customer="c",
+        )
+    )
+    assert calls == ["attempted"]
