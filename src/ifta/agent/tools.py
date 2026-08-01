@@ -16,7 +16,7 @@ from typing import Any
 
 from anthropic import beta_tool
 
-from ifta.calc import IftaReturn, compute_per_truck_lines, compute_return
+from ifta.calc import IftaReturn, compute_per_truck_lines
 from ifta.client import (
     ClientContext,
     ClientRecord,
@@ -26,12 +26,12 @@ from ifta.client import (
     quarter_key,
     resolve_inbox,
 )
-from ifta.ingest import ingest_folder
 from ifta.models import CleanData
 from ifta.preflight import preflight_inputs
+from ifta.quarter import compute_quarter
 from ifta.rates import RateTable, fetch_rates
 from ifta.review_packet import build_review_packet
-from ifta.validator import Finding, format_findings, load_kb, validate
+from ifta.validator import Finding, format_findings, load_kb
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -92,11 +92,20 @@ def _load_quarter_full(
     if not inbox.exists():
         raise FileNotFoundError(f"No inbox folder for {qkey} at {inbox}")
     client_context = _build_client_context(qkey, client, inbox)
-    data = ingest_folder(inbox)
-    rates = fetch_rates(qkey)
-    ret = compute_return(data, rates)
-    findings = validate(data, ret)
-    return data, rates, ret, findings, client_context
+    # Same deterministic core the delivery paths use. Ingesting directly here
+    # skipped preflight's dedup, so the agent could review a return computed
+    # from double-counted duplicate exports — numbers that disagreed with the
+    # packet actually produced for the customer.
+    computed = compute_quarter(
+        inbox, qkey, ignore_preflight_errors=True, require_data=False
+    )
+    return (
+        computed.data,
+        computed.rates,
+        computed.ret,
+        computed.findings,
+        client_context,
+    )
 
 
 def _load_quarter(

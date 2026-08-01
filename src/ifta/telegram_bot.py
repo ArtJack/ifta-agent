@@ -58,7 +58,7 @@ from ifta.agent import (
 from ifta.agent import (
     review as agent_review,
 )
-from ifta.calc import compute_per_truck_lines, compute_return
+from ifta.calc import compute_per_truck_lines
 from ifta.client import (
     ClientRecord,
     load_client_context,
@@ -67,17 +67,16 @@ from ifta.client import (
     quarter_key,
     resolve_output_dir,
 )
-from ifta.ingest import ingest_folder
 from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
 from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
-from ifta.rates import fetch_rates
+from ifta.quarter import QuarterBlockedError, compute_quarter
 from ifta.report import (
     write_cleaned_csvs,
     write_owner_review_xlsx,
     write_per_truck_filings,
     write_portal_csv,
 )
-from ifta.validator import Finding, format_findings, validate
+from ifta.validator import Finding, format_findings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SUPPORTED_UPLOAD_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".pdf"}
@@ -1007,13 +1006,20 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
         client=submission.client_id,
         inbox=submission.inbox,
     )
-    # Honor preflight's auto-dedup. Preflight already told the customer which
-    # duplicate export it would skip; ingesting it anyway would sum both copies
-    # (coalesce_* adds same-(truck,state) rows) and double the gallons/miles.
-    data = ingest_folder(submission.inbox, skip_files=set(report.skipped_files))
-    rates_table = fetch_rates(submission.quarter)
-    ret = compute_return(data, rates_table)
-    findings = validate(data, ret)
+    # Shared deterministic core (dedup + gate live there, not here). The
+    # preflight report is passed in because the identity check above already
+    # needed it — recomputing would re-parse every file in the inbox.
+    try:
+        computed = compute_quarter(
+            submission.inbox, submission.quarter, preflight=report
+        )
+    except QuarterBlockedError as e:
+        raise DeliveryBlockedError(str(e)) from e
+
+    data = computed.data
+    rates_table = computed.rates
+    ret = computed.ret
+    findings = computed.findings
 
     out_dir = resolve_output_dir(config.project_root, submission.quarter, submission.client_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1083,11 +1089,11 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
     if agent_error:
         warnings.append(f"Agent review failed: {agent_error}")
 
-    ready_to_file = (
-        not ret.rate_fallback_used
-        and not agent_error
-        and not any(f.severity == "error" for f in findings)
-    )
+    # Readiness comes from the shared deterministic gate, not a local boolean
+    # (this used to re-derive rate-fallback + error-findings inline and could
+    # drift from every other path). A failed agent review still blocks here:
+    # the packet went out without the review it promises.
+    ready_to_file = not computed.blocked and not agent_error
     return DeliveryResult(
         client_name=client_context.client_name,
         quarter=submission.quarter,

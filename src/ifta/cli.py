@@ -8,7 +8,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ifta.calc import compute_per_truck_lines, compute_return
+from ifta.calc import compute_per_truck_lines
 from ifta.client import (
     ClientInboxError,
     load_client_context,
@@ -17,11 +17,10 @@ from ifta.client import (
     resolve_inbox,
     resolve_output_dir,
 )
-from ifta.ingest import ingest_folder
+from ifta.quarter import QuarterBlockedError, compute_quarter
 from ifta.rates import fetch_rates
 from ifta.report import write_cleaned_csvs, write_per_truck_filings, write_portal_csv
-from ifta.review_packet import determine_filing_status
-from ifta.validator import format_findings, validate
+from ifta.validator import format_findings
 
 console = Console()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -107,29 +106,36 @@ def run(
     console.print(f"  out:    {out_dir}")
 
     console.print("\n[bold]1. Ingesting raw files…")
-    data = ingest_folder(inbox)
+    # Same deterministic core as the web/Telegram/deliver paths. `run` stays
+    # permissive about preflight ERRORs (it's the raw compute command and has
+    # no --force), but it now honors preflight's dedup — previously it was the
+    # one path that ingested duplicate exports twice.
+    try:
+        computed = compute_quarter(
+            inbox, qkey, fuel=fuel, refresh_rates=refresh_rates, ignore_preflight_errors=True
+        )
+    except QuarterBlockedError as e:
+        raise click.ClickException(str(e)) from e
+    data, rates, ret, findings = computed.data, computed.rates, computed.ret, computed.findings
     console.print(f"  trucks: {data.trucks}")
     console.print(
         f"  states: {len(data.states)}  mile-rows: {len(data.miles)}  fuel-rows: {len(data.fuel)}"
     )
-    if not data.miles and not data.fuel:
-        raise click.ClickException("no usable data parsed from inbox files")
+    for skipped in computed.preflight.skipped_files:
+        console.print(f"  [yellow]skipped duplicate export:[/] {skipped}")
 
     console.print("\n[bold]2. Fetching IFTA rates…")
-    rates = fetch_rates(qkey, fuel=fuel, force=refresh_rates)
     console.print(f"  loaded {len(rates.rates)} jurisdictions ({rates.fuel})")
     if rates.warning:
         console.print(f"  [bold yellow]WARNING:[/] {rates.warning}")
 
     console.print("\n[bold]3. Computing return…")
-    ret = compute_return(data, rates)
     console.print(f"  fleet miles:   {ret.fleet_miles:,.0f}")
     console.print(f"  fleet gallons: {ret.fleet_gallons:,.2f}")
     console.print(f"  fleet MPG:     {ret.fleet_mpg:.4f}")
     console.print(f"  TOTAL TAX DUE: ${ret.total_tax_due:,.2f}")
 
     console.print("\n[bold]4. Validating…")
-    findings = validate(data, ret)
     if findings:
         console.print(format_findings(findings))
     else:
@@ -154,6 +160,13 @@ def run(
         "[dim]  (Note: ifta run skips the AI review — use 'ifta deliver' for "
         "review_note.md too.)[/]"
     )
+
+    # This command writes a portal CSV, so it owes the same filing verdict the
+    # other paths give — a DO_NOT_FILE return must never look upload-ready.
+    if computed.blocked:
+        console.print("\n[bold red]Do NOT upload this to the portal yet:[/]")
+        for reason in computed.block_reasons:
+            console.print(f"  • {reason}")
 
     _print_summary(ret)
 
@@ -198,13 +211,18 @@ def rates(quarter: str, fuel: str, force: bool) -> None:
 def _load_quarter(qkey: str, fuel: str, force: bool, client: str | None = None):
     """Re-run ingest + compute for a quarter; used by review/ask."""
     inbox = _resolve_inbox(qkey, client)
-    if not inbox.exists():
-        raise click.ClickException(f"inbox not found: {inbox}")
-    data = ingest_folder(inbox)
-    rates = fetch_rates(qkey, fuel=fuel, force=force)
-    ret = compute_return(data, rates)
-    findings = validate(data, ret)
-    return data, ret, findings
+    try:
+        computed = compute_quarter(
+            inbox,
+            qkey,
+            fuel=fuel,
+            refresh_rates=force,
+            ignore_preflight_errors=True,
+            require_data=False,
+        )
+    except QuarterBlockedError as e:
+        raise click.ClickException(str(e)) from e
+    return computed.data, computed.ret, computed.findings
 
 
 MODEL_CHOICES = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"]
@@ -471,12 +489,18 @@ def deliver(
 
     # --- 1. Pipeline ---
     console.print("\n[bold]Step 1/4 — Computing return from raw files…[/]")
-    # Honor preflight's auto-dedup (see the web + Telegram paths): ingesting a
-    # file preflight flagged as a duplicate export would sum both copies.
-    data = ingest_folder(inbox, skip_files=set(report.skipped_files))
-    rates_table = fetch_rates(qkey, fuel=fuel)
-    ret = compute_return(data, rates_table)
-    findings = validate(data, ret)
+    # Shared deterministic core; `report` is reused so the inbox isn't parsed
+    # twice, and --force maps onto ignoring preflight's ERROR gate.
+    try:
+        computed = compute_quarter(
+            inbox, qkey, fuel=fuel, preflight=report, ignore_preflight_errors=True
+        )
+    except QuarterBlockedError as e:
+        raise click.ClickException(str(e)) from e
+    data = computed.data
+    rates_table = computed.rates
+    ret = computed.ret
+    findings = computed.findings
 
     console.print(
         f"  Trucks: {', '.join(data.trucks)}   States: {len(data.states)}   "
@@ -577,10 +601,9 @@ def deliver(
     # The deterministic gate decides whether this packet may be filed — the same
     # rule the web/Telegram paths use. Error-level findings (implausible fleet
     # MPG, no fuel parsed) must not print "Upload this file to the gov portal".
-    filing_status = determine_filing_status(ret, findings)
-    if filing_status["status"] == "DO_NOT_FILE":
+    if computed.blocked:
         console.print("\n[bold red]Do NOT upload yet — resolve these first:[/]")
-        for reason in filing_status["reasons"]:
+        for reason in computed.block_reasons:
             console.print(f"  • {reason}")
         console.print(f"\nWorksheet for review only:\n  {portal_csv}\n")
     else:
