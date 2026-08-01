@@ -13,13 +13,19 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ifta.web import db
-from ifta.web.models import Submission
+from ifta.web.models import Submission, SubmissionStatus
 from ifta.web.pipeline import PipelineError, process_submission
 
 log = logging.getLogger("ifta.web.worker")
 
 SuccessCallback = Callable[[Submission, Path], None]
 FailureCallback = Callable[[Submission, str], None]
+
+# How many times a submission may be claimed before an unexpected failure is
+# treated as permanent. Transient causes (iftach.org down, model API blip, a
+# Postgres failover) clear on their own; telling a customer to re-upload for
+# one of those loses them for a reason that had nothing to do with their files.
+DEFAULT_MAX_ATTEMPTS = 3
 
 
 def process_one_job(
@@ -28,12 +34,21 @@ def process_one_job(
     *,
     on_success: SuccessCallback | None = None,
     on_failure: FailureCallback | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> Submission | None:
     """Claim and process one QUEUED submission.
 
     Returns the submission (in its final DONE/FAILED state) or None if the
     queue is empty. Exceptions from `process_submission` are caught and
     surfaced via `on_failure` — the worker loop must not crash on bad input.
+
+    Two kinds of failure are treated differently:
+
+    * `PipelineError` is the customer's to fix (unreadable files, nothing
+      parsable, preflight errors). It fails immediately and emails them.
+    * Anything else is assumed transient and the job goes back on the queue,
+      up to `max_attempts` claims. The customer hears nothing until the
+      retries are exhausted, because there is nothing for them to do.
     """
     sub = db.claim_next_queued(db_path)
     if sub is None:
@@ -53,8 +68,30 @@ def process_one_job(
                 log.exception("on_failure callback raised for %s", sub.id)
         return db.get_submission(db_path, sub.id)
     except Exception as e:
-        # Unexpected — log full trace, surface short message to customer.
-        log.exception("submission %s failed (unexpected): %s", sub.id, e)
+        # Unexpected — assume transient and retry before giving up on it.
+        log.exception(
+            "submission %s failed (unexpected, attempt %d/%d): %s",
+            sub.id,
+            sub.attempts,
+            max_attempts,
+            e,
+        )
+        if sub.attempts < max_attempts:
+            requeued = db.requeue_for_retry(
+                db_path,
+                sub.id,
+                error=f"Attempt {sub.attempts} failed, will retry: {e}",
+            )
+            if requeued is not None:
+                log.info(
+                    "submission %s requeued for retry (%d/%d)",
+                    sub.id,
+                    sub.attempts,
+                    max_attempts,
+                )
+                return requeued
+            # Couldn't requeue (someone else moved the row) — fall through and
+            # record the failure rather than silently dropping the job.
         db.mark_failed(
             db_path,
             sub.id,
@@ -85,6 +122,7 @@ def run_forever(
     stale_running_timeout_seconds: int = 900,
     on_success: SuccessCallback | None = None,
     on_failure: FailureCallback | None = None,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> None:
     """Block forever, draining the queue. Stop with Ctrl-C."""
     log.info(
@@ -95,11 +133,40 @@ def run_forever(
     )
 
     def reap(reason: str) -> None:
-        """Fail submissions orphaned in RUNNING and tell the customer."""
+        """Recover submissions orphaned in RUNNING by a dead worker.
+
+        A crash mid-job is not the customer's fault, so an orphan with attempts
+        left goes back on the queue instead of emailing them to re-upload.
+        Only once the retries are spent does it become a real failure.
+        """
         for reaped_sub in db.reap_stale_running(
             db_path, max_seconds_running=stale_running_timeout_seconds
         ):
-            log.warning("reaped stale RUNNING submission %s (%s)", reaped_sub.id, reason)
+            if reaped_sub.attempts < max_attempts:
+                requeued = db.requeue_for_retry(
+                    db_path,
+                    reaped_sub.id,
+                    error=(
+                        f"Worker stopped mid-job on attempt {reaped_sub.attempts}; "
+                        "retrying automatically."
+                    ),
+                    from_status=SubmissionStatus.FAILED,
+                )
+                if requeued is not None:
+                    log.warning(
+                        "reaped stale submission %s (%s) — requeued (%d/%d)",
+                        reaped_sub.id,
+                        reason,
+                        reaped_sub.attempts,
+                        max_attempts,
+                    )
+                    continue
+            log.warning(
+                "reaped stale submission %s (%s) — marking failed after %d attempt(s)",
+                reaped_sub.id,
+                reason,
+                reaped_sub.attempts,
+            )
             if on_failure:
                 try:
                     on_failure(reaped_sub, reaped_sub.error or "worker crashed mid-job")
@@ -120,6 +187,7 @@ def run_forever(
                 submissions_dir,
                 on_success=on_success,
                 on_failure=on_failure,
+                max_attempts=max_attempts,
             )
             if sub is None:
                 # Reap on the idle path too. A startup-only reap can never

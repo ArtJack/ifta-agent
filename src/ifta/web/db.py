@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         reject_submission,
         reopen_for_review,
         request_more_files_submission,
+        requeue_for_retry,
         update_intake_brief,
         update_telegram_card,
     )

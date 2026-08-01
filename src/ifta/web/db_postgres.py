@@ -53,9 +53,17 @@ CREATE TABLE IF NOT EXISTS submissions (
     decided_by TEXT,
     decline_reason TEXT,
     telegram_message_id BIGINT,
-    telegram_chat_id BIGINT
+    telegram_chat_id BIGINT,
+    attempts INTEGER NOT NULL DEFAULT 0
 )
 """
+
+# Forward-only migrations for databases created before a column existed.
+# Postgres supports IF NOT EXISTS here, so this is a plain idempotent DDL list
+# (the SQLite backend has to inspect PRAGMA table_info instead).
+_MIGRATIONS = (
+    "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+)
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_status ON submissions(status)",
@@ -91,6 +99,8 @@ def init_db(path: Path) -> None:
     """Create the schema (idempotent). ``path`` is ignored (signature parity)."""
     with _connect() as conn:
         conn.execute(_CREATE_TABLE)
+        for stmt in _MIGRATIONS:
+            conn.execute(stmt)
         for stmt in _CREATE_INDEXES:
             conn.execute(stmt)
 
@@ -216,7 +226,8 @@ def claim_next_queued(path: Path) -> Submission | None:
         if row is None:
             return None
         conn.execute(
-            "UPDATE submissions SET status = %s, started_at = %s WHERE id = %s",
+            "UPDATE submissions SET status = %s, started_at = %s,"
+            " attempts = attempts + 1 WHERE id = %s",
             (SubmissionStatus.RUNNING.value, started_at, row["id"]),
         )
         claimed = conn.execute(
@@ -258,6 +269,37 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
                 SubmissionStatus.FAILED.value,
             ),
         )
+
+
+def requeue_for_retry(
+    path: Path,
+    submission_id: str,
+    *,
+    error: str,
+    from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+) -> Submission | None:
+    """Put a submission back on the queue after a transient failure.
+
+    Mirror of the SQLite backend: the row keeps its attempts count so the
+    worker eventually stops retrying. Returns None if it already moved on.
+    """
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = %s, started_at = NULL, error = %s"
+            " WHERE id = %s AND status = %s",
+            (
+                SubmissionStatus.QUEUED.value,
+                error[:4000],
+                submission_id,
+                from_status.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = %s", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row is not None else None
 
 
 def reap_stale_running(
@@ -474,4 +516,5 @@ def _row_to_submission(row: dict) -> Submission:
         decline_reason=row["decline_reason"],
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
+        attempts=row.get("attempts") or 0,
     )
