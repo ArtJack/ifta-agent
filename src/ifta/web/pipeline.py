@@ -17,12 +17,11 @@ import logging
 import os
 from pathlib import Path
 
-from ifta.calc import compute_per_truck_lines, compute_return
-from ifta.ingest import ingest_folder
-from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
-from ifta.rates import fetch_rates
+from ifta.calc import compute_per_truck_lines
+from ifta.preflight import PreflightReport
+from ifta.quarter import QuarterBlockedError, compute_quarter
 from ifta.report import write_per_truck_filings, write_portal_csv
-from ifta.validator import Finding, format_findings, validate
+from ifta.validator import Finding, format_findings
 from ifta.web.customer_view import (
     CUSTOMER_NOTE_FILENAME,
     CUSTOMER_NOTE_HTML_FILENAME,
@@ -58,35 +57,23 @@ def process_submission(
     inbox = submissions_dir / sub.id / "inbox" / sub.quarter
     out_dir = submissions_dir / sub.id / "outputs" / sub.quarter
 
-    if not inbox.exists():
-        raise PipelineError(f"inbox not found: {inbox}")
-
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    report = preflight_inputs(inbox)
     # Step 8: preflight's job is to *advise*, not to reject the customer.
     # Truly fatal cases (missing inbox, no supported files, ingest crash) are
     # still errors and we surface them; data-quality issues (duplicates,
     # high MPG, missing miles/fuel) are warnings the agent + customer-summary
     # report can explain in plain English.
-    if report.has_errors:
-        raise PipelineError(
-            "Preflight found ERROR-level issues in your uploaded files:\n"
-            + format_preflight(report)
-        )
+    try:
+        computed = compute_quarter(inbox, sub.quarter, fuel=fuel)
+    except QuarterBlockedError as e:
+        raise PipelineError(str(e)) from e
 
-    # Honor preflight's auto-dedup: skip files we already know are
-    # duplicate summary/detail exports of the same data.
-    data = ingest_folder(inbox, skip_files=set(report.skipped_files))
-    if not data.miles and not data.fuel:
-        raise PipelineError(
-            "No usable data parsed from the uploaded files. "
-            "Expected mileage by truck/state and fuel by truck/state."
-        )
-
-    rates_table = fetch_rates(sub.quarter, fuel=fuel)
-    ret = compute_return(data, rates_table)
-    findings = validate(data, ret)
+    report = computed.preflight
+    data = computed.data
+    rates_table = computed.rates
+    ret = computed.ret
+    findings = computed.findings
 
     write_portal_csv(ret, out_dir / "ifta_portal.csv", portal="generic")
 
