@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     decided_by TEXT,
     decline_reason TEXT,
     telegram_message_id INTEGER,
-    telegram_chat_id INTEGER
+    telegram_chat_id INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_confirm_token ON submissions(confirm_token);
@@ -60,6 +61,7 @@ _MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("decline_reason", "TEXT"),
     ("telegram_message_id", "INTEGER"),
     ("telegram_chat_id", "INTEGER"),
+    ("attempts", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
@@ -226,7 +228,8 @@ def claim_next_queued(path: Path) -> Submission | None:
         if row is None:
             return None
         cur = conn.execute(
-            "UPDATE submissions SET status = ?, started_at = ?"
+            "UPDATE submissions SET status = ?, started_at = ?,"
+            " attempts = attempts + 1"
             " WHERE id = ? AND status = ?",
             (
                 SubmissionStatus.RUNNING.value,
@@ -284,6 +287,44 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
                 SubmissionStatus.FAILED.value,
             ),
         )
+
+
+def requeue_for_retry(
+    path: Path,
+    submission_id: str,
+    *,
+    error: str,
+    from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+) -> Submission | None:
+    """Put a submission back on the queue after a transient failure.
+
+    Used when the pipeline died for a reason the customer can do nothing about
+    (rate-site outage, model API blip, DB hiccup). The row keeps its attempts
+    count so the worker can stop retrying eventually. Returns the updated row,
+    or None if it had already moved on (another actor decided it first).
+
+    `from_status` is the state the row must still be in. It defaults to
+    RUNNING — the in-flight failure case. The stale-job reaper passes FAILED,
+    because it has already marked its orphans failed before deciding which of
+    them are worth another attempt.
+    """
+    with _connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = ?, started_at = NULL, error = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.QUEUED.value,
+                error[:4000],
+                submission_id,
+                from_status.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row is not None else None
 
 
 def reap_stale_running(
@@ -542,4 +583,5 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
         decline_reason=row["decline_reason"],
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
+        attempts=row["attempts"] or 0,
     )
