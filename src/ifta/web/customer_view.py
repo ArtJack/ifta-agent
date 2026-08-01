@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ifta.calc import IftaReturn
+from ifta.review_packet import determine_filing_status
 from ifta.validator import Finding
 from ifta.web.models import Submission
 
@@ -126,7 +127,7 @@ def render_customer_view(
     the real attachment filenames so the list shows e.g. 'truck_55.xlsx'.
     """
     greeting = f"Hi {sub.name}," if sub.name else "Hi,"
-    status_blurb = _status_blurb(note)
+    status_blurb = _status_blurb(note, ret, findings)
 
     lines: list[str] = [greeting, ""]
     lines.append(f"Your {sub.quarter} IFTA packet is ready. {status_blurb}")
@@ -180,7 +181,7 @@ def render_customer_view_html(
     p: list[str] = [f'<p style="margin:0 0 16px">{greeting}</p>']
     p.append(
         f'<p style="margin:0 0 16px">Your <strong>{esc(sub.quarter)}</strong> IFTA '
-        f"packet is ready. {esc(_status_blurb(note))}</p>"
+        f"packet is ready. {esc(_status_blurb(note, ret, findings))}</p>"
     )
     p.append(
         '<table role="presentation" cellpadding="0" cellspacing="0" '
@@ -227,10 +228,28 @@ def render_customer_view_html(
 # ─── internals ────────────────────────────────────────────────────────────────
 
 
-def _status_blurb(note: Any | None) -> str:
-    if note is None:
-        return "Please review the attached files before filing."
+def effective_filing_status(
+    note: Any | None, ret: IftaReturn, findings: list[Finding] | None
+) -> str:
+    """Filing status to show the customer.
+
+    Prefers the agent's reviewed status, but falls back to the deterministic
+    gate whenever the AI review didn't run (no API key, API outage, or the
+    IFTA_WEB_SKIP_AGENT kill switch) — in those cases `note` is None. Without
+    the fallback, a packet carrying error-level findings (implausible fleet
+    MPG, no fuel parsed) is presented as plainly "ready", which is exactly the
+    filing the MPG gate exists to stop.
+    """
     status = getattr(note, "filing_status", None) or ""
+    if status:
+        return str(status)
+    return str(determine_filing_status(ret, list(findings or []))["status"])
+
+
+def _status_blurb(
+    note: Any | None, ret: IftaReturn, findings: list[Finding] | None
+) -> str:
+    status = effective_filing_status(note, ret, findings)
     return _FILING_STATUS_LINE.get(status, "Please review the attached files before filing.")
 
 
@@ -347,7 +366,7 @@ def render_customer_summary(
     carrier = sub.company or "your company"
     header = f"# IFTA {sub.quarter} Summary Report — {carrier}"
     status_header = _FILING_STATUS_HEADER.get(
-        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+        effective_filing_status(note, ret, findings), "Status: Packet ready"
     )
 
     lines: list[str] = [
@@ -868,7 +887,7 @@ def _build_summary_flowables(
     s = _pdf_styles()
     carrier = sub.company or "your company"
     status_text = _FILING_STATUS_HEADER.get(
-        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+        effective_filing_status(note, ret, findings), "Status: Packet ready"
     )
 
     flow: list[Any] = [

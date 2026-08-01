@@ -20,6 +20,7 @@ from ifta.client import (
 from ifta.ingest import ingest_folder
 from ifta.rates import fetch_rates
 from ifta.report import write_cleaned_csvs, write_per_truck_filings, write_portal_csv
+from ifta.review_packet import determine_filing_status
 from ifta.validator import format_findings, validate
 
 console = Console()
@@ -470,7 +471,9 @@ def deliver(
 
     # --- 1. Pipeline ---
     console.print("\n[bold]Step 1/4 — Computing return from raw files…[/]")
-    data = ingest_folder(inbox)
+    # Honor preflight's auto-dedup (see the web + Telegram paths): ingesting a
+    # file preflight flagged as a duplicate export would sum both copies.
+    data = ingest_folder(inbox, skip_files=set(report.skipped_files))
     rates_table = fetch_rates(qkey, fuel=fuel)
     ret = compute_return(data, rates_table)
     findings = validate(data, ret)
@@ -571,11 +574,15 @@ def deliver(
 
     # --- 5. Final summary box ---
     console.rule("[bold green]✓ DONE")
-    if ret.rate_fallback_used:
-        console.print(
-            "\n[bold yellow]Do not upload yet:[/] current-quarter rates were not confirmed. "
-            f"Use this worksheet only for review:\n  {portal_csv}\n"
-        )
+    # The deterministic gate decides whether this packet may be filed — the same
+    # rule the web/Telegram paths use. Error-level findings (implausible fleet
+    # MPG, no fuel parsed) must not print "Upload this file to the gov portal".
+    filing_status = determine_filing_status(ret, findings)
+    if filing_status["status"] == "DO_NOT_FILE":
+        console.print("\n[bold red]Do NOT upload yet — resolve these first:[/]")
+        for reason in filing_status["reasons"]:
+            console.print(f"  • {reason}")
+        console.print(f"\nWorksheet for review only:\n  {portal_csv}\n")
     else:
         console.print(f"\n[bold]Upload this file to the gov portal:[/]\n  {portal_csv}\n")
     if note_path:
@@ -1210,7 +1217,8 @@ def worker(poll_interval: float, once: bool) -> None:
     notifier = AdminNotifier(load_admin_notifier_config())
 
     def on_success(sub: Submission, out_dir: _Path) -> None:
-        if email_client.send_packet(sub, out_dir):
+        delivered = email_client.send_packet(sub, out_dir)
+        if delivered:
             _db.mark_packet_sent(db_path, sub.id)
         # Surface warnings (MPG_HIGH = missing fuel, duplicate sources, etc.) so
         # the operator hears about a shipped-but-questionable packet, not only
@@ -1221,6 +1229,17 @@ def worker(poll_interval: float, once: bool) -> None:
         if warnings:
             headline = f"⚠️ IFTA packet delivered — {len(warnings)} warning(s) to review"
             extras["Warnings"] = ", ".join(warnings)
+        if not delivered:
+            # The packet was computed but never reached the customer (Resend
+            # outage, attachments over the size cap, email disabled). Saying
+            # "delivered" here would hide a customer waiting on nothing.
+            headline = "❌ IFTA packet NOT emailed — send it manually"
+            extras["Delivery"] = (
+                "send_packet returned False — customer has NOT received the packet. "
+                f"Outputs are on disk at {out_dir}."
+            )
+            if warnings:
+                extras["Warnings"] = ", ".join(warnings)
         try:
             notifier.send(
                 format_event(
@@ -1259,7 +1278,7 @@ def worker(poll_interval: float, once: bool) -> None:
             )
 
     console.print("[bold]Starting IFTA worker[/]")
-    console.print(f"  db:           {db_path}")
+    console.print(f"  db:           {_db.describe_backend(db_path)}")
     console.print(f"  submissions:  {submissions_dir}")
     console.print(f"  email:        {'enabled' if email_client.config.enabled else 'disabled (no RESEND_API_KEY)'}")
     console.print(f"  poll:         {poll_interval}s")

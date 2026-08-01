@@ -326,7 +326,12 @@ def create_app() -> FastAPI:
 
         # ── Telegram approval path (v2) ─────────────────────────────────
         if initial_status == SubmissionStatus.PENDING_APPROVAL:
-            # Generate intake brief.
+            # Pre-initialized: brief generation is best-effort, and if it raises
+            # the suppressed exception must not leave these unbound — that would
+            # 500 the customer *after* their files and DB row are committed, and
+            # strand the row in PENDING_APPROVAL with no card and no ack email.
+            brief_path: str | None = None
+            summary = ""
             with contextlib.suppress(Exception):
                 brief_path, summary = generate_intake_brief(
                     submissions_dir, sub, inbox_path=inbox,
@@ -336,9 +341,7 @@ def create_app() -> FastAPI:
                 )
 
             # Send Telegram approval card to admin(s).
-            summary_text = getattr(sub, "_summary_cache", None) or (
-                (brief_path and summary) or f"New submission from {sub.email}"
-            )
+            summary_text = (brief_path and summary) or f"New submission from {sub.email}"
             with contextlib.suppress(Exception):
                 cards = approval_client.send_approval_card(sub, summary_text)
                 for chat_id, message_id in cards:

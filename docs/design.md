@@ -16,7 +16,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
         ┌───────────────────┼─────────────────────────┐
         ▼                   ▼                         ▼
   deterministic        review agent              operator gate
-  pipeline             (Claude + 18 tools)       (Telegram approve/reject)
+  pipeline             (Claude + 17 tools)       (Telegram approve/reject)
   ingest→calc→         grounded in returns,      → packet emailed (Resend)
   validate→report      rules, rates, history
 ```
@@ -27,7 +27,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
   `report.py` (Excel + portal CSV). `rates.py` fetches/caches the quarterly rate matrix;
   `models.py` holds the canonical data model + jurisdiction sets.
 - **`agent/`** — the LLM review layer: `runner.py` (SDK invocation, model/effort kwargs,
-  conversation loop), `tools.py` (18 grounded tools), `prompts.py` (system + review templates),
+  conversation loop), `tools.py` (17 grounded tools), `prompts.py` (system + review templates),
   `context.py`, `metrics.py`, `tracing.py`.
 - **`intake/`** — `extract.py`, `receipts.py` (vision receipt extraction), `reconcile.py`, `report.py`.
 - **`eval/`** — `runner.py`, `judge.py` (validated LLM-as-judge with an `agreement()` gate).
@@ -37,7 +37,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
 
 ## 3. Key design decisions
 1. **Math is deterministic; the LLM only reviews.** The trust boundary that makes the output
-   safe for a government filing. The agent is grounded by 18 tools so it cites real numbers
+   safe for a government filing. The agent is grounded by 17 tools so it cites real numbers
    rather than inventing them.
 2. **Rates are data, not code.** A new quarter = a new cached rate matrix; calculation logic
    is unchanged.
@@ -45,8 +45,11 @@ multi-tenant web/Telegram intake and a layered eval harness.
    → tracing (observability) → span/trajectory eval (regression guardrail) → rubric + validated
    judge (advisory). A model never grades its own filing call.
 4. **Cost by risk tier.** Haiku/Sonnet for routine, Opus for high-risk, `--effort` for depth.
-5. **Cheap, real deployment.** Mac mini + Cloudflare Tunnel (no public IP, no server bill) +
-   Vercel frontend.
+5. **Cheap, real deployment — twice.** Mac mini + Cloudflare Tunnel (no public IP, no server
+   bill) + Vercel frontend, and an equivalent Azure footprint (Container Apps + managed
+   Postgres + Azure Files, Bicep IaC in `deploy/azure/`, runbook in [AZURE.md](AZURE.md)).
+   The backend is env-flagged: `IFTA_WEB_DB_URL` set ⇒ Postgres (Azure), unset ⇒ SQLite
+   (Mac mini). Either host can serve prod; teardown/rollback is documented both ways.
 
 ## 4. Data model (core)
 `MileageRow{ jurisdiction, miles }` · `FuelRow{ jurisdiction, gallons, date, tax_paid }` ·
