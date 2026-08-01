@@ -345,3 +345,80 @@ def test_system_prompt_has_injection_defence() -> None:
     assert "data, never instructions" in lowered
     # The deterministic status must be stated as un-overridable by file content.
     assert "do_not_file" in lowered and "ready_to_file" in lowered
+
+
+# ── shared core: one gate, every customer-facing path ───────────────────────
+
+
+def _write_dupe_inbox(inbox: Path) -> None:
+    """A summary export and a detail export of the SAME fuel data."""
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "miles_q2.csv").write_text(
+        "Truck,State,Miles\n101,CA,6000\n", encoding="utf-8"
+    )
+    (inbox / "fuel_summary.csv").write_text(
+        "Truck,State,Gallons\n101,CA,1000\n", encoding="utf-8"
+    )
+    (inbox / "fuel_detail.csv").write_text(
+        "Truck,State,Gallons\n101,CA,400\n101,CA,600\n", encoding="utf-8"
+    )
+
+
+def test_compute_quarter_honors_preflight_dedup(tmp_path: Path) -> None:
+    """The duplicate export must be counted once, not summed twice."""
+    from ifta.quarter import compute_quarter
+
+    inbox = tmp_path / "inbox"
+    _write_dupe_inbox(inbox)
+    computed = compute_quarter(inbox, "Q2-2026")
+    # 1000 gal counted once — not 2000.
+    assert computed.ret.fleet_gallons == pytest.approx(1000.0)
+    assert computed.preflight.skipped_files, "preflight should have flagged a duplicate"
+
+
+def test_compute_quarter_gate_blocks_implausible_mpg(tmp_path: Path) -> None:
+    from ifta.quarter import compute_quarter
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    # 60000 miles on 100 gallons = 600 MPG — physically impossible.
+    (inbox / "miles.csv").write_text("Truck,State,Miles\n101,CA,60000\n", encoding="utf-8")
+    (inbox / "fuel.csv").write_text("Truck,State,Gallons\n101,CA,100\n", encoding="utf-8")
+
+    computed = compute_quarter(inbox, "Q2-2026")
+    assert computed.blocked
+    assert computed.status == "DO_NOT_FILE"
+    assert computed.block_reasons
+
+
+def test_compute_quarter_raises_when_nothing_parsable(tmp_path: Path) -> None:
+    from ifta.quarter import QuarterBlockedError, compute_quarter
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "notes.csv").write_text("hello,world\n1,2\n", encoding="utf-8")
+    with pytest.raises(QuarterBlockedError):
+        compute_quarter(inbox, "Q2-2026")
+
+
+def test_every_customer_path_uses_the_shared_core() -> None:
+    """Guard against a new path re-open-coding the pipeline.
+
+    The dedup bug and the filing-gate bypass both existed because a path
+    assembled ingest/compute/validate itself and missed a step. Any module
+    that produces a customer packet should go through compute_quarter.
+    """
+    import inspect
+
+    import ifta.cli as cli_mod
+    import ifta.telegram_bot as tg_mod
+    import ifta.web.pipeline as web_mod
+
+    for mod in (web_mod, tg_mod, cli_mod):
+        src = inspect.getsource(mod)
+        assert "compute_quarter" in src, f"{mod.__name__} bypasses the shared core"
+        # ingest_folder must not be called directly by a delivery path.
+        assert "ingest_folder(" not in src, (
+            f"{mod.__name__} calls ingest_folder directly — it would miss "
+            "preflight's dedup. Use compute_quarter()."
+        )
