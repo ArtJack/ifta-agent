@@ -319,10 +319,27 @@ def _to_float(v: object) -> float:
     return -f if neg else f
 
 
+def _header_tokens(header: object) -> list[str]:
+    """Split a header into lowercase word tokens ('KM Driven' -> ['km','driven'])."""
+    return [t for t in re.split(r"[^a-z0-9]+", str(header or "").lower()) if t]
+
+
 def _miles_unit_factor(header: object) -> float:
-    """Factor to convert a miles-column's values to miles (km -> miles)."""
-    h = _norm_header(header)
-    if "kilomet" in h or h.endswith("km"):
+    """Factor to convert a miles-column's values to miles (km -> miles).
+
+    Token-based, because MILES_KEYWORDS classifies any header *containing* "km"
+    as a distance column. Matching only on a trailing "km" (the previous rule)
+    converted "Distance (km)" but not "KM Driven" — the latter was read as
+    miles and inflated distance by 1.609x, silently overstating taxable gallons
+    on Canadian/metric ELD exports.
+    """
+    tokens = _header_tokens(header)
+    # An explicit miles token wins: "Miles (converted from KM)" holds miles.
+    if any(t in {"mile", "miles", "mi"} for t in tokens):
+        return 1.0
+    if any(t in {"km", "kms"} or t.startswith(("kilomet", "kilomtr")) for t in tokens):
+        return _KM_TO_MILES
+    if _norm_header(header).endswith("km"):  # glued forms, e.g. "TotalKM"
         return _KM_TO_MILES
     return 1.0
 

@@ -89,26 +89,29 @@ def run_forever(
     """Block forever, draining the queue. Stop with Ctrl-C."""
     log.info(
         "worker starting — db=%s submissions=%s poll=%.1fs",
-        db_path,
+        db.describe_backend(db_path),
         submissions_dir,
         poll_interval_seconds,
     )
 
-    # Recover any submissions left in RUNNING by a previous crashed worker.
-    # Failure emails fire here so customers learn their submission didn't
-    # complete instead of waiting forever.
-    reaped = db.reap_stale_running(
-        db_path, max_seconds_running=stale_running_timeout_seconds
-    )
-    for reaped_sub in reaped:
-        log.warning(
-            "reaped stale RUNNING submission %s — marking failed", reaped_sub.id
-        )
-        if on_failure:
-            try:
-                on_failure(reaped_sub, reaped_sub.error or "worker crashed mid-job")
-            except Exception:
-                log.exception("on_failure callback raised for reaped %s", reaped_sub.id)
+    def reap(reason: str) -> None:
+        """Fail submissions orphaned in RUNNING and tell the customer."""
+        for reaped_sub in db.reap_stale_running(
+            db_path, max_seconds_running=stale_running_timeout_seconds
+        ):
+            log.warning("reaped stale RUNNING submission %s (%s)", reaped_sub.id, reason)
+            if on_failure:
+                try:
+                    on_failure(reaped_sub, reaped_sub.error or "worker crashed mid-job")
+                except Exception:
+                    log.exception(
+                        "on_failure callback raised for reaped %s", reaped_sub.id
+                    )
+
+    # Recover submissions left RUNNING by a previous crashed worker. Failure
+    # emails fire here so customers learn their submission didn't complete
+    # instead of waiting forever.
+    reap("startup")
 
     while True:
         try:
@@ -119,9 +122,25 @@ def run_forever(
                 on_failure=on_failure,
             )
             if sub is None:
+                # Reap on the idle path too. A startup-only reap can never
+                # recover the common crash: launchd KeepAlive / ACA restart the
+                # worker within seconds, so the orphan is far younger than the
+                # stale cutoff at startup and nothing checks it again — the
+                # customer's job would sit in RUNNING forever.
+                reap("idle sweep")
                 # Sleep inside the try so Ctrl-C during the idle wait exits
                 # cleanly instead of dumping a stack trace to the operator.
                 time.sleep(poll_interval_seconds)
         except KeyboardInterrupt:
             log.info("worker stopping (Ctrl-C)")
             return
+        except Exception:
+            # A transient DB error (Postgres failover, idle disconnect, Azure
+            # Burstable maintenance) must not kill the worker — that is exactly
+            # what manufactures an orphaned RUNNING row. Log, back off, retry.
+            log.exception("worker loop error — retrying in %.1fs", poll_interval_seconds)
+            try:
+                time.sleep(poll_interval_seconds)
+            except KeyboardInterrupt:
+                log.info("worker stopping (Ctrl-C)")
+                return

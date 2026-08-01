@@ -394,20 +394,25 @@ var registriesConfig = [
 ]
 
 // Secrets referenced from Key Vault by the user-assigned identity.
-var kvSecretRefs = [
+var telegramSecretRef = [
+  { name: 'telegram-bot-token', keyVaultUrl: '${kv.properties.vaultUri}secrets/telegram-bot-token', identity: uami.id }
+]
+
+// web + worker also need the bot token: AdminNotifier (operator alerts for
+// delivered/failed packets) and the approval-card client both require it, and
+// without it they silently disable themselves — TELEGRAM_ADMIN_CHAT_ID alone
+// is dead config. Gated on deployTelegramBot because the Key Vault secret is
+// only created in that case; referencing a missing secret fails the deploy.
+var kvSecretRefs = concat([
   { name: 'anthropic-api-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/anthropic-api-key', identity: uami.id }
   { name: 'resend-api-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/resend-api-key', identity: uami.id }
   { name: 'turnstile-secret-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/turnstile-secret-key', identity: uami.id }
   { name: 'ifta-web-backend-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/ifta-web-backend-key', identity: uami.id }
   { name: 'ifta-web-db-url', keyVaultUrl: '${kv.properties.vaultUri}secrets/ifta-web-db-url', identity: uami.id }
-]
-
-var telegramSecretRef = [
-  { name: 'telegram-bot-token', keyVaultUrl: '${kv.properties.vaultUri}secrets/telegram-bot-token', identity: uami.id }
-]
+], deployTelegramBot ? telegramSecretRef : [])
 
 // Env vars shared by web + worker (the self-service intake path).
-var commonEnv = [
+var commonEnv = concat([
   { name: 'IFTA_WEB_DB_URL', secretRef: 'ifta-web-db-url' }
   { name: 'IFTA_WEB_SUBMISSIONS_DIR', value: '/app/data/web_submissions' }
   { name: 'ANTHROPIC_API_KEY', secretRef: 'anthropic-api-key' }
@@ -419,7 +424,9 @@ var commonEnv = [
   { name: 'IFTA_WEB_AGENT_EFFORT', value: agentEffort }
   { name: 'TELEGRAM_ADMIN_CHAT_ID', value: telegramAdminChatId }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
-]
+], deployTelegramBot ? [
+  { name: 'TELEGRAM_BOT_TOKEN', secretRef: 'telegram-bot-token' }
+] : [])
 
 var coreVolumes = [
   { name: 'submissions', storageName: 'submissions', storageType: 'AzureFile' }
@@ -470,6 +477,17 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContainerAp
             { name: 'TURNSTILE_SECRET_KEY', secretRef: 'turnstile-secret-key' }
             { name: 'IFTA_WEB_BACKEND_KEY', secretRef: 'ifta-web-backend-key' }
             { name: 'IFTA_WEB_CORS_ORIGINS', value: corsOrigins }
+            // Container Apps' Envoy ingress connects from a pod IP, not
+            // loopback, so uvicorn's default forwarded_allow_ips=127.0.0.1
+            // makes it ignore X-Forwarded-For. Every request would then look
+            // like it came from the proxy and ALL customers would share one
+            // per-IP submit-rate bucket (the 4th submission of the hour, from
+            // anyone, gets a 429). The ingress is the only possible peer here,
+            // so trusting its forwarded header is correct.
+            { name: 'FORWARDED_ALLOW_IPS', value: '*' }
+            // Fail closed: refuse submissions if the CAPTCHA secret is missing
+            // rather than silently accepting unverified traffic.
+            { name: 'IFTA_WEB_REQUIRE_TURNSTILE', value: '1' }
           ])
           volumeMounts: coreVolumeMounts
           probes: [
@@ -541,16 +559,18 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContaine
 }
 
 // ------------------------------ Telegram bot ---------------------------------
-// No ingress; long-polls Telegram, so one always-on replica. Mounts clients +
-// inbox + outputs. NOTE: data/telegram_access.json (approvals) is a hardcoded
-// single file under data/ and needs the env-override added in Phase 3 to
-// persist across restarts — tracked, not yet wired here.
+// No ingress; long-polls Telegram, so one always-on replica. Mounts clients,
+// inbox, outputs, and the web-submissions share (the approval callback reads
+// intake briefs from it). Customer approvals persist on the `state` share via
+// IFTA_TELEGRAM_ACCESS_FILE, so they survive restarts and redeploys.
 
 resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContainerApps && deployTelegramBot) {
   name: '${namePrefix}-telegram'
   location: location
   tags: tags
-  dependsOn: [acrPull, kvSecretsUser, secAnthropic, secTelegram]
+  // Now references the full secret set (job DB + Resend) for the web-approval
+  // callback, so it must wait for those secrets too.
+  dependsOn: [acrPull, kvSecretsUser, secAnthropic, secResend, secTurnstile, secBackendKey, secDbUrl, secTelegram]
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${uami.id}': {} }
@@ -560,9 +580,11 @@ resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContai
     configuration: {
       activeRevisionsMode: 'Single'
       registries: registriesConfig
-      secrets: concat([
-        { name: 'anthropic-api-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/anthropic-api-key', identity: uami.id }
-      ], telegramSecretRef)
+      // Same secret set as web/worker: the bot's web-approval callback reads
+      // the job DB and emails the customer, so it needs the DB URL and Resend
+      // key too — with a container-local SQLite fallback it would answer
+      // "Submission not found" for every operator decision.
+      secrets: kvSecretRefs
     }
     template: {
       containers: [
@@ -580,6 +602,16 @@ resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContai
             { name: 'TELEGRAM_AGENT_MODEL', value: agentModel }
             { name: 'TELEGRAM_AGENT_EFFORT', value: agentEffort }
             { name: 'IFTA_TELEGRAM_ACCESS_FILE', value: '/app/var/state/telegram_access.json' }
+            // The Accept / Decline / Request-more-files buttons on a web
+            // submission are handled in this process: it opens the same job
+            // DB the worker uses, reads the intake brief off the submissions
+            // share, and emails the customer the decision.
+            { name: 'IFTA_WEB_DB_URL', secretRef: 'ifta-web-db-url' }
+            { name: 'IFTA_WEB_SUBMISSIONS_DIR', value: '/app/data/web_submissions' }
+            { name: 'RESEND_API_KEY', secretRef: 'resend-api-key' }
+            { name: 'RESEND_FROM_EMAIL', value: resendFromEmail }
+            { name: 'IFTA_WEB_PUBLIC_BASE_URL', value: publicBaseUrl }
+            { name: 'IFTA_WEB_ADMIN_BCC', value: adminBcc }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
           ]
           volumeMounts: [
@@ -587,6 +619,7 @@ resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContai
             { volumeName: 'inbox', mountPath: '/app/inbox' }
             { volumeName: 'outputs', mountPath: '/app/outputs' }
             { volumeName: 'state', mountPath: '/app/var/state' }
+            { volumeName: 'submissions', mountPath: '/app/data/web_submissions' }
           ]
         }
       ]
@@ -595,6 +628,7 @@ resource telegramApp 'Microsoft.App/containerApps@2024-03-01' = if (deployContai
         { name: 'inbox', storageName: 'inbox', storageType: 'AzureFile' }
         { name: 'outputs', storageName: 'outputs', storageType: 'AzureFile' }
         { name: 'state', storageName: 'state', storageType: 'AzureFile' }
+        { name: 'submissions', storageName: 'submissions', storageType: 'AzureFile' }
       ]
       scale: { minReplicas: 1, maxReplicas: 1 }
     }

@@ -247,9 +247,16 @@ def load_telegram_access(project_root: Path) -> dict[str, set[int]]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        # Fail closed (nobody is authorized) but say so loudly — a silent {}
+        # here looks identical to "no customers approved yet".
+        print(
+            f"  ‼ {path} is corrupt ({e}). ALL Telegram approvals are being "
+            "denied until it is repaired or restored."
+        )
         return {}
     if not isinstance(payload, dict):
+        print(f"  ‼ {path} is not a JSON object. ALL Telegram approvals denied.")
         return {}
     clients_payload = payload.get("clients", payload)
     if not isinstance(clients_payload, dict):
@@ -271,22 +278,48 @@ def load_telegram_access(project_root: Path) -> dict[str, set[int]]:
     return access
 
 
+class AccessFileCorruptError(RuntimeError):
+    """The Telegram access file exists but isn't readable JSON."""
+
+
 def _read_raw_access_file(project_root: Path) -> dict[str, Any]:
-    """Read the full access file as a dict so we can preserve unknown sections."""
+    """Read the full access file as a dict so we can preserve unknown sections.
+
+    Raises AccessFileCorruptError when the file exists but doesn't parse.
+    Callers here are read-modify-write; treating a corrupt file as ``{}`` would
+    make the very next write (any incoming DM triggers `upsert_known_user`)
+    overwrite it with only that one section, permanently erasing every client
+    approval, preauth and pending record.
+    """
     path = telegram_access_path(project_root)
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError as e:
+        raise AccessFileCorruptError(
+            f"{path} is not valid JSON ({e}). Refusing to overwrite it — "
+            "restore it from a backup or repair it by hand."
+        ) from e
+    if not isinstance(payload, dict):
+        raise AccessFileCorruptError(
+            f"{path} does not contain a JSON object. Refusing to overwrite it."
+        )
+    return payload
 
 
 def _write_raw_access_file(project_root: Path, payload: dict[str, Any]) -> Path:
+    """Persist the access file atomically (temp file + rename).
+
+    A plain write truncates first, so a crash or container kill mid-write (more
+    likely on the Azure Files mount) would leave torn JSON — and every customer
+    instantly unauthorized.
+    """
     path = telegram_access_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
@@ -974,7 +1007,10 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
         client=submission.client_id,
         inbox=submission.inbox,
     )
-    data = ingest_folder(submission.inbox)
+    # Honor preflight's auto-dedup. Preflight already told the customer which
+    # duplicate export it would skip; ingesting it anyway would sum both copies
+    # (coalesce_* adds same-(truck,state) rows) and double the gallons/miles.
+    data = ingest_folder(submission.inbox, skip_files=set(report.skipped_files))
     rates_table = fetch_rates(submission.quarter)
     ret = compute_return(data, rates_table)
     findings = validate(data, ret)
@@ -2117,7 +2153,13 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     is_self_share = target_uid is not None and target_uid == actor.id
 
     # Customer is sharing their OWN contact → verify against phone preauth.
-    if is_self_share or (not is_admin and target_uid is None):
+    # ONLY a contact Telegram itself resolved to the sender's account counts.
+    # An unresolved contact (user_id=None) carries an arbitrary phone number
+    # from the sender's address book: accepting it would let anyone claim a
+    # pending preauth by attaching a contact card bearing the carrier's phone
+    # number (which is public in FMCSA SAFER), consuming the real customer's
+    # preauth and gaining access to that carrier's filings.
+    if is_self_share:
         await _handle_customer_phone_verify(
             update,
             context,
@@ -2127,10 +2169,12 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if not is_admin:
-        # Non-admin sharing someone else's contact — odd, just ignore.
+        # Either someone else's contact, or one Telegram couldn't tie to an
+        # account — neither proves the sender owns the number.
         await msg.reply_text(
-            "That's not your own contact. To verify yourself, use the "
-            "'Share my contact' button after /start."
+            "I can only verify a contact Telegram confirms is yours.\n"
+            "Tap the 'Share my contact' button after /start, or send /id and "
+            "pass your Telegram id to Eugene."
         )
         return
 
@@ -2672,16 +2716,6 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    _safe_admin_notify(
-        notifier,
-        headline="✅ IFTA packet delivered",
-        source="telegram bot",
-        customer=customer_label,
-        quarter=submission.quarter,
-        extras={"Client": submission.client_name},
-        review_note_path=result.review_note,
-    )
-
     status = "READY FOR HUMAN REVIEW" if result.ready_to_file else "REVIEW REQUIRED"
     warning_text = "\n\nWarnings:\n" + "\n".join(f"- {w}" for w in result.warnings) if result.warnings else ""
     await update.message.reply_text(
@@ -2696,12 +2730,58 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=_approved_keyboard(result.quarter),
     )
 
-    for path in result.customer_files:
-        if not path.exists():
-            continue
-        await update.message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
-        with path.open("rb") as fh:
-            await update.message.reply_document(document=fh, filename=path.name)
+    # Send every packet file, surviving individual failures. A single
+    # TelegramError (network blip, or a file over the bot upload cap) used to
+    # abort the handler mid-loop: the customer silently received a PARTIAL
+    # packet — missing per-truck files or the portal CSV — while the admin had
+    # already been told it was delivered.
+    expected = [p for p in result.customer_files if p.exists()]
+    missing = [p.name for p in result.customer_files if not p.exists()]
+    failed: list[str] = []
+    for path in expected:
+        try:
+            await update.message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
+            with path.open("rb") as fh:
+                await update.message.reply_document(document=fh, filename=path.name)
+        except (TelegramError, OSError) as e:
+            failed.append(f"{path.name} ({type(e).__name__})")
+
+    sent = len(expected) - len(failed)
+    if failed or missing:
+        problems = failed + [f"{name} (not generated)" for name in missing]
+        with contextlib.suppress(TelegramError):
+            await update.message.reply_text(
+                f"⚠️ Sent {sent} of {len(expected) + len(missing)} packet files.\n"
+                "These did not go through:\n"
+                + "\n".join(f"- {p}" for p in problems)
+                + "\n\nRun /process again to resend, or contact Eugene."
+            )
+
+    # Notify the admin only once delivery has actually been attempted, and say
+    # plainly when it was incomplete.
+    if failed or missing:
+        _safe_admin_notify(
+            notifier,
+            headline=f"⚠️ IFTA packet INCOMPLETE — {sent}/{len(expected) + len(missing)} files sent",
+            source="telegram bot",
+            customer=customer_label,
+            quarter=submission.quarter,
+            extras={
+                "Client": submission.client_name,
+                "Undelivered": ", ".join(failed + missing),
+            },
+            review_note_path=result.review_note,
+        )
+    else:
+        _safe_admin_notify(
+            notifier,
+            headline="✅ IFTA packet delivered",
+            source="telegram bot",
+            customer=customer_label,
+            quarter=submission.quarter,
+            extras={"Client": submission.client_name},
+            review_note_path=result.review_note,
+        )
 
 
 def _customer_label(update: Update, submission: Submission) -> str:
@@ -2778,7 +2858,7 @@ async def web_approval_callback(
     # Lazy imports to avoid circular deps and keep the import cost out of
     # unrelated code paths.
     from ifta.web import db as web_db
-    from ifta.web.app import get_db_path
+    from ifta.web.app import get_db_path, get_submissions_dir
     from ifta.web.email import EmailClient, load_email_config_from_env
     from ifta.web.telegram_approval import TelegramApprovalClient, load_approval_config
 
@@ -2852,7 +2932,14 @@ async def web_approval_callback(
         # Falls back to a generic email if the brief is missing.
         intake_brief_text = ""
         if sub.intake_brief_path:
-            brief_path = config.project_root / sub.intake_brief_path
+            # intake_brief_path is stored relative to the SUBMISSIONS dir
+            # (intake_brief.py does relative_to(submissions_dir)), not the
+            # project root — resolving it against the root missed the
+            # data/web_submissions/ segment in every configuration, so the
+            # read always failed and the customer silently got the generic
+            # "we'll follow up with specifics" filler instead of the concrete
+            # preflight findings the operator meant to send.
+            brief_path = get_submissions_dir() / sub.intake_brief_path
             with contextlib.suppress(Exception):
                 intake_brief_text = brief_path.read_text(encoding="utf-8")
         with contextlib.suppress(Exception):
