@@ -356,11 +356,32 @@ def lookup_rate(state: str, quarter: str, fuel: str = "diesel") -> str:
             hydrogen.
     """
     rates = fetch_rates(quarter, fuel=fuel)
-    base = rates.get(state.upper())
-    sur = rates.surcharge(state.upper())
+    code = state.upper()
+    if code not in rates.rates:
+        # A missing jurisdiction must be an explicit error: RateTable.get()
+        # would default to 0.0, which is indistinguishable from Oregon's
+        # legitimate $0.00 (weight-mile) rate and would silently mislead the
+        # review agent on a typo'd or non-IFTA code.
+        return json.dumps(
+            {
+                "error": (
+                    f"No {rates.fuel} rate for jurisdiction '{code}' in the "
+                    f"{rates.source_quarter or rates.requested_quarter or quarter} matrix. "
+                    "Check the 2-letter IFTA jurisdiction code — do not treat this "
+                    "as a $0.00 rate."
+                ),
+                "state": code,
+                "requested_quarter": rates.requested_quarter,
+                "source_quarter": rates.source_quarter,
+                "fallback_used": rates.fallback_used,
+                "fuel": rates.fuel,
+            }
+        )
+    base = rates.get(code)
+    sur = rates.surcharge(code)
     return json.dumps(
         {
-            "state": state.upper(),
+            "state": code,
             "requested_quarter": rates.requested_quarter,
             "source_quarter": rates.source_quarter,
             "fallback_used": rates.fallback_used,

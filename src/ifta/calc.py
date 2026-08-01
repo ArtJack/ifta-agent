@@ -27,15 +27,24 @@ def _round_half_up(value: float, ndigits: int = 2) -> float:
     return float(Decimal(str(value)).quantize(q, rounding=ROUND_HALF_UP))
 
 
-def _round_half_up_int(value: float) -> int:
+def round_half_up_int(value: float) -> int:
     """Round to a whole number, halves up (0.5→1, 2.5→3).
 
     Python's builtin round() uses banker's rounding (round-half-to-even), which
     diverges from the IFTA portal on exact .5 boundaries. Gallons print as whole
     numbers on the return, so they must use the same half-up rule as the dollar
     amounts (see _tax) rather than builtin round().
+
+    Public because report.py must round displayed gallons/miles identically:
+    when calc used half-up and the writers used builtin round(), a portal row
+    could contradict its own arithmetic (Taxable 803 − Tax Paid 802 printed
+    against Net 0).
     """
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+# Back-compat alias for existing callers/tests that import the private name.
+_round_half_up_int = round_half_up_int
 
 
 def _tax(net_gal: float, rate: float) -> float:

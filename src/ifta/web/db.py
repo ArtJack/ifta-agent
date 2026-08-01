@@ -47,6 +47,19 @@ def _use_postgres() -> bool:
     return bool(os.environ.get("IFTA_WEB_DB_URL"))
 
 
+def describe_backend(path: object = None) -> str:
+    """Human-readable name of the active job-state store, for startup banners.
+
+    The SQLite path argument is threaded through every db call but ignored by
+    the Postgres backend, so printing it unconditionally told an operator
+    debugging Azure that job state lived in a local .db file that is in fact
+    never read.
+    """
+    if _use_postgres():
+        return "postgres (IFTA_WEB_DB_URL)"
+    return f"sqlite {path}" if path is not None else "sqlite"
+
+
 def _backend() -> ModuleType:
     """Return the active backend module, resolved per call from the environment."""
     if _use_postgres():

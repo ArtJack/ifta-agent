@@ -143,8 +143,23 @@ def _load_registry_cached(registry_dir_str: str) -> dict[str, ClientRecord]:
         meta = client_dir / "client.json"
         if not meta.exists():
             continue
-        payload = json.loads(meta.read_text(encoding="utf-8"))
-        cid = _slugify(str(payload.get("client_id") or client_dir.name))
+        # One malformed client.json must not take down the whole registry.
+        # load_registry runs before virtually every Telegram handler reply, so
+        # an uncaught error here (a hand-edited trailing comma — an explicitly
+        # documented admin workflow — or a non-numeric telegram id) made the
+        # bot stop answering *everyone*, with the polling loop still up and
+        # nothing explaining why. Skip the bad record, keep serving the rest.
+        try:
+            payload = json.loads(meta.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("client.json must contain a JSON object")
+            cid = _slugify(str(payload.get("client_id") or client_dir.name))
+            telegram_user_ids = tuple(
+                int(uid) for uid in payload.get("telegram_user_ids", []) if uid is not None
+            )
+        except (OSError, ValueError, TypeError) as e:
+            print(f"  ‼ skipping client registry entry {meta}: {e}")
+            continue
         records[cid] = ClientRecord(
             client_id=cid,
             name=str(payload.get("name") or cid),
@@ -153,9 +168,7 @@ def _load_registry_cached(registry_dir_str: str) -> dict[str, ClientRecord]:
             portal=str(payload.get("portal") or "generic"),
             profile=str(payload.get("profile") or "none"),
             source_folder=payload.get("source_folder"),
-            telegram_user_ids=tuple(
-                int(uid) for uid in payload.get("telegram_user_ids", []) if uid is not None
-            ),
+            telegram_user_ids=telegram_user_ids,
             profile_path=payload.get("profile_path") or "profile.json",
             history_path=payload.get("history_path") or "history.json",
             active=bool(payload.get("active", False)),
