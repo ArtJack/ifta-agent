@@ -51,14 +51,22 @@ if [[ "$ACTION" == "uninstall" ]]; then
 fi
 
 # --- read config (needed by both doctor and install) ------------------------
-state_dir="/var/lib/ifta"
-backup_dir="/var/lib/ifta/backups"
-if [[ -f "$ENV_FILE" ]]; then
-    # shellcheck disable=SC1090  # operator-supplied config, path known at runtime
-    set -a; source "$ENV_FILE"; set +a
-    state_dir="${IFTA_STATE_DIR:-$state_dir}"
-    backup_dir="${IFTA_BACKUP_HOST_DIR:-$backup_dir}"
-fi
+#
+# Deliberately NOT `source`d. Compose parses .env with its own KEY=VALUE reader
+# where the value is the rest of the line, verbatim — so the documented
+#     RESEND_FROM_EMAIL=ArtJeck IFTA <ifta@artjeck.com>
+# is valid there but is a *bash syntax error* ('<' is a redirect), which aborted
+# this script before it did anything. Read the keys we need the same way compose
+# does instead of handing operator config to the shell.
+env_value() {
+    local key="$1"
+    [[ -f "$ENV_FILE" ]] || return 0
+    sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tail -n 1 | sed -e 's/[[:space:]]*$//' \
+        -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
+state_dir="$(env_value IFTA_STATE_DIR)"; state_dir="${state_dir:-/var/lib/ifta}"
+backup_dir="$(env_value IFTA_BACKUP_HOST_DIR)"; backup_dir="${backup_dir:-$state_dir/backups}"
 
 # --- doctor -----------------------------------------------------------------
 if [[ "$ACTION" == "doctor" ]]; then
@@ -85,7 +93,7 @@ if [[ "$mode" != "600" ]]; then
     chmod 600 "$ENV_FILE"
 fi
 for required in POSTGRES_PASSWORD ANTHROPIC_API_KEY RESEND_API_KEY CLOUDFLARE_TUNNEL_TOKEN; do
-    value="${!required:-}"
+    value="$(env_value "$required")"
     [[ -n "$value" && "$value" != REPLACE* ]] || die "$required is unset or still a placeholder in $ENV_FILE"
 done
 

@@ -42,6 +42,10 @@ x-app-env: &app-env
   RESEND_API_KEY: ${RESEND_API_KEY:?}
   RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:?}
   TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+  # Defaults ON so an .env written before this variable existed still fails
+  # closed: a missing CAPTCHA secret rejects anonymous submissions rather than
+  # quietly disabling bot protection on a public endpoint.
+  IFTA_WEB_REQUIRE_TURNSTILE: ${IFTA_WEB_REQUIRE_TURNSTILE:-1}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   TELEGRAM_ADMIN_USER_IDS: ${TELEGRAM_ADMIN_USER_IDS:-}
   TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}

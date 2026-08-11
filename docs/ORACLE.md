@@ -445,6 +445,22 @@ repo. (Podman would work with `podman-compose`, but the systemd units and the
 be set (it is, in the compose env) — cloudflared is not loopback, so without it
 uvicorn ignores `X-Forwarded-For` and sees one client IP for everyone.
 
+**`/submit` returns 503 "CAPTCHA not configured".** That is the fail-closed
+guard doing its job: `IFTA_WEB_REQUIRE_TURNSTILE=1` (the compose default) makes
+a missing `TURNSTILE_SECRET_KEY` reject anonymous submissions rather than
+silently accepting them. Set the real Turnstile secret. Do **not** turn the
+guard off to make the error go away — without it the endpoint is open to
+anyone, and every submission spends model tokens and sends mail from your
+domain.
+
+**A submission sits in QUEUED for a minute after an error.** Expected. A
+transient failure (iftach.org blip, model API hiccup, Postgres failover) is
+retried with a back-off — 60s, then 120s — before the customer is told
+anything. `next_attempt_at` on the row holds the deadline; `attempts` counts
+claims and stops at 3. Previously all three retries fired within a few
+milliseconds, so the customer got a failure email for outages that would have
+cleared on their own.
+
 **Tunnel is up but `/healthz` 502s.** The Public Hostname service must be
 `http://web:8000` — the compose service name, not `localhost:8000`. cloudflared
 runs in its own container.

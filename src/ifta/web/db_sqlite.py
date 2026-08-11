@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     decline_reason TEXT,
     telegram_message_id INTEGER,
     telegram_chat_id INTEGER,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_confirm_token ON submissions(confirm_token);
@@ -62,6 +63,7 @@ _MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("telegram_message_id", "INTEGER"),
     ("telegram_chat_id", "INTEGER"),
     ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("next_attempt_at", "TEXT"),
 )
 
 
@@ -220,10 +222,14 @@ def claim_next_queued(path: Path) -> Submission | None:
     """
     started_at = _now_iso()
     with _connect(path) as conn:
+        # next_attempt_at holds a retry back-off deadline. Timestamps are
+        # ISO-8601 UTC of fixed width, so the string comparison is chronological
+        # (the same property `started_at <` already relies on).
         row = conn.execute(
             "SELECT id FROM submissions WHERE status = ?"
+            " AND (next_attempt_at IS NULL OR next_attempt_at <= ?)"
             " ORDER BY created_at ASC LIMIT 1",
-            (SubmissionStatus.QUEUED.value,),
+            (SubmissionStatus.QUEUED.value, started_at),
         ).fetchone()
         if row is None:
             return None
@@ -295,6 +301,7 @@ def requeue_for_retry(
     *,
     error: str,
     from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+    delay_seconds: float = 0.0,
 ) -> Submission | None:
     """Put a submission back on the queue after a transient failure.
 
@@ -307,14 +314,26 @@ def requeue_for_retry(
     RUNNING — the in-flight failure case. The stale-job reaper passes FAILED,
     because it has already marked its orphans failed before deciding which of
     them are worth another attempt.
+
+    `delay_seconds` holds the row back from the queue for that long. Retries
+    exist for faults that take seconds-to-minutes to clear, so re-claiming
+    immediately (which is what happens without this — the requeued row is the
+    oldest QUEUED one) spends every attempt before the fault could resolve.
     """
+    next_attempt_at = (
+        (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
+        if delay_seconds > 0
+        else None
+    )
     with _connect(path) as conn:
         cur = conn.execute(
-            "UPDATE submissions SET status = ?, started_at = NULL, error = ?"
+            "UPDATE submissions SET status = ?, started_at = NULL, error = ?,"
+            " next_attempt_at = ?"
             " WHERE id = ? AND status = ?",
             (
                 SubmissionStatus.QUEUED.value,
                 error[:4000],
+                next_attempt_at,
                 submission_id,
                 from_status.value,
             ),
@@ -584,4 +603,5 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
         attempts=row["attempts"] or 0,
+        next_attempt_at=_dt(row["next_attempt_at"]),
     )

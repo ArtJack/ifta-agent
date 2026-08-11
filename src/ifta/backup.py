@@ -30,6 +30,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from ifta.backup_remote import RemoteConfig, prune_remote, upload_snapshot
 
@@ -104,27 +105,54 @@ def resolve_keep(explicit: int | None = None) -> int:
         raise RuntimeError(f"IFTA_BACKUP_KEEP must be an integer, got {raw!r}") from exc
 
 
+def split_dsn_password(db_url: str) -> tuple[str, str | None]:
+    """Split a libpq URI into (password-free DSN, password).
+
+    The password must not travel in ``argv``: it would be readable in
+    ``/proc/<pid>/cmdline`` for the life of the dump, and ``TimeoutExpired``
+    embeds the whole command in its message, so any traceback would print it.
+    libpq reads ``PGPASSWORD`` from the environment instead.
+    """
+    parts = urlsplit(db_url)
+    if "@" not in parts.netloc:
+        return db_url, None
+    userinfo, hostpart = parts.netloc.rsplit("@", 1)
+    if ":" not in userinfo:
+        return db_url, None
+    user, raw_password = userinfo.split(":", 1)
+    stripped = urlunsplit(
+        (parts.scheme, f"{user}@{hostpart}", parts.path, parts.query, parts.fragment)
+    )
+    # The URI form is percent-encoded; PGPASSWORD wants the literal value.
+    return stripped, unquote(raw_password)
+
+
 def _dump_postgres(db_url: str, dest_file: Path) -> None:
     """Dump the job database with ``pg_dump`` in restorable custom format.
 
     Custom format (rather than plain SQL) so ``pg_restore`` can rebuild into an
     empty database selectively, and because it compresses on the way out.
     """
+    safe_dsn, password = split_dsn_password(db_url)
     cmd = [
         "pg_dump",
         "--format=custom",
         "--no-owner",
         "--no-privileges",
         f"--file={dest_file}",
-        db_url,
+        safe_dsn,
     ]
+    env = dict(os.environ)
+    if password is not None:
+        env["PGPASSWORD"] = password
     try:
-        # Fixed argv, no shell — the DSN never goes through a command line parser.
+        # Fixed argv, no shell — and no credential in it either.
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=_PG_DUMP_TIMEOUT_S,
+            env=env,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(

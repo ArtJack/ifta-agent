@@ -1,0 +1,79 @@
+# Test suite — runs on every push and pull request.
+#
+# The Postgres service exists so the production job-state backend is actually
+# exercised. Without IFTA_TEST_PG_URL the round-trip tests in
+# tests/test_web_db_postgres.py skip, which meant the backend the Oracle box
+# runs was the *least* tested one: only the dispatch check and the AST parity
+# guard ran, while the queue-claim, lifecycle and failure-recovery semantics
+# never executed anywhere.
+
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pw
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Don't start the suite against a server that isn't accepting
+        # connections yet — that would surface as a flaky skip, not a failure.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Types
+        run: mypy
+
+      - name: Tests (incl. Postgres backend)
+        env:
+          IFTA_TEST_PG_URL: postgresql://postgres:pw@localhost:5432/postgres
+        run: pytest -q -rs
+
+      - name: Fail if the Postgres backend tests were skipped
+        # A silent skip is how this backend went untested in the first place.
+        env:
+          IFTA_TEST_PG_URL: postgresql://postgres:pw@localhost:5432/postgres
+        run: |
+          out="$(pytest tests/test_web_db_postgres.py -q -rs 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -q "SKIPPED"; then
+            echo "::error::Postgres backend tests skipped in CI — they must run here."
+            exit 1
+          fi
+
+      - name: Fail if the working tree was dirtied by the test run
+        # The suite has historically fetched live rate matrices into the tracked
+        # tree; that must not pass unnoticed.
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::tests modified tracked files:"
+            git status --porcelain
+            exit 1
+          fi

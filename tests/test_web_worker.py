@@ -137,6 +137,9 @@ def test_process_one_job_fails_after_exhausting_retries(
             submissions_dir,
             on_failure=lambda s, msg: failures.append((s.id, msg)),
             max_attempts=3,
+            # No back-off here: this test is about the attempt *ceiling*, and
+            # the real 60s delay is covered in test_audit_followup_aug2026.
+            retry_backoff_seconds=0,
         )
         if out is None:
             break

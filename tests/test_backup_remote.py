@@ -230,7 +230,9 @@ def test_snapshot_includes_pg_dump_when_db_url_is_set(tmp_path, monkeypatch) -> 
 
     assert calls and calls[0][0] == "pg_dump"
     assert "--format=custom" in calls[0]
-    assert calls[0][-1] == "postgresql://ifta:pw@postgres:5432/ifta"
+    # The password is stripped out of argv and handed over via PGPASSWORD —
+    # see test_audit_followup_aug2026.
+    assert calls[0][-1] == "postgresql://ifta@postgres:5432/ifta"
     with tarfile.open(snap) as tar:
         names = tar.getnames()
     assert "data/web_jobs.dump" in names

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     decline_reason TEXT,
     telegram_message_id BIGINT,
     telegram_chat_id BIGINT,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT
 )
 """
 
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS submissions (
 # (the SQLite backend has to inspect PRAGMA table_info instead).
 _MIGRATIONS = (
     "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS next_attempt_at TEXT",
 )
 
 _CREATE_INDEXES = (
@@ -217,11 +219,15 @@ def claim_next_queued(path: Path) -> Submission | None:
     """
     started_at = _now_iso()
     with _connect() as conn:
+        # next_attempt_at holds a retry back-off deadline. Timestamps are
+        # ISO-8601 UTC of fixed width, so the string comparison is chronological
+        # (the same property `started_at <` already relies on).
         row = conn.execute(
             "SELECT id FROM submissions WHERE status = %s"
+            " AND (next_attempt_at IS NULL OR next_attempt_at <= %s)"
             " ORDER BY created_at ASC LIMIT 1"
             " FOR UPDATE SKIP LOCKED",
-            (SubmissionStatus.QUEUED.value,),
+            (SubmissionStatus.QUEUED.value, started_at),
         ).fetchone()
         if row is None:
             return None
@@ -277,19 +283,29 @@ def requeue_for_retry(
     *,
     error: str,
     from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+    delay_seconds: float = 0.0,
 ) -> Submission | None:
     """Put a submission back on the queue after a transient failure.
 
     Mirror of the SQLite backend: the row keeps its attempts count so the
-    worker eventually stops retrying. Returns None if it already moved on.
+    worker eventually stops retrying, and `delay_seconds` holds it back from
+    the queue so the retry outlives the fault it is retrying. Returns None if
+    it already moved on.
     """
+    next_attempt_at = (
+        (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
+        if delay_seconds > 0
+        else None
+    )
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE submissions SET status = %s, started_at = NULL, error = %s"
+            "UPDATE submissions SET status = %s, started_at = NULL, error = %s,"
+            " next_attempt_at = %s"
             " WHERE id = %s AND status = %s",
             (
                 SubmissionStatus.QUEUED.value,
                 error[:4000],
+                next_attempt_at,
                 submission_id,
                 from_status.value,
             ),
@@ -517,4 +533,5 @@ def _row_to_submission(row: dict) -> Submission:
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
         attempts=row.get("attempts") or 0,
+        next_attempt_at=_dt(row.get("next_attempt_at")),
     )

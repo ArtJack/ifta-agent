@@ -27,6 +27,18 @@ FailureCallback = Callable[[Submission, str], None]
 # one of those loses them for a reason that had nothing to do with their files.
 DEFAULT_MAX_ATTEMPTS = 3
 
+# Base back-off before a requeued job may be claimed again, doubling per
+# attempt (60s, then 120s). Without a delay the retry is theatre: the requeued
+# row is immediately the oldest QUEUED one, so the worker re-claims it within
+# microseconds and spends all three attempts in a few milliseconds — long
+# before an iftach.org blip or a Postgres failover could possibly clear.
+DEFAULT_RETRY_BACKOFF_SECONDS = 60.0
+
+
+def retry_delay_seconds(attempts: int, base: float = DEFAULT_RETRY_BACKOFF_SECONDS) -> float:
+    """Exponential back-off for the Nth attempt (1-based)."""
+    return base * (2 ** max(0, attempts - 1))
+
 
 def process_one_job(
     db_path: Path,
@@ -35,6 +47,7 @@ def process_one_job(
     on_success: SuccessCallback | None = None,
     on_failure: FailureCallback | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> Submission | None:
     """Claim and process one QUEUED submission.
 
@@ -81,6 +94,7 @@ def process_one_job(
                 db_path,
                 sub.id,
                 error=f"Attempt {sub.attempts} failed, will retry: {e}",
+                delay_seconds=retry_delay_seconds(sub.attempts, retry_backoff_seconds),
             )
             if requeued is not None:
                 log.info(
@@ -123,6 +137,7 @@ def run_forever(
     on_success: SuccessCallback | None = None,
     on_failure: FailureCallback | None = None,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> None:
     """Block forever, draining the queue. Stop with Ctrl-C."""
     log.info(
@@ -151,6 +166,7 @@ def run_forever(
                         "retrying automatically."
                     ),
                     from_status=SubmissionStatus.FAILED,
+                    delay_seconds=retry_delay_seconds(reaped_sub.attempts, retry_backoff_seconds),
                 )
                 if requeued is not None:
                     log.warning(
@@ -171,9 +187,7 @@ def run_forever(
                 try:
                     on_failure(reaped_sub, reaped_sub.error or "worker crashed mid-job")
                 except Exception:
-                    log.exception(
-                        "on_failure callback raised for reaped %s", reaped_sub.id
-                    )
+                    log.exception("on_failure callback raised for reaped %s", reaped_sub.id)
 
     # Recover submissions left RUNNING by a previous crashed worker. Failure
     # emails fire here so customers learn their submission didn't complete
@@ -188,6 +202,7 @@ def run_forever(
                 on_success=on_success,
                 on_failure=on_failure,
                 max_attempts=max_attempts,
+                retry_backoff_seconds=retry_backoff_seconds,
             )
             if sub is None:
                 # Reap on the idle path too. A startup-only reap can never
