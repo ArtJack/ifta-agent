@@ -202,7 +202,60 @@ def _split_markdown_sections(text: str) -> dict[str, str]:
     return sections
 
 
+_TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>")
+_ENTITY_RE = re.compile(r"&(?:#\d+|#x[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);")
+_TRUNCATE_MARKER = "\n…(truncated)"
+
+
 def _truncate(body: str, max_chars: int) -> str:
+    """Truncate an assembled Telegram HTML body to ``<= max_chars`` while keeping
+    it well-formed.
+
+    Telegram rejects malformed HTML with HTTP 400, so a blind slice is unsafe:
+    it can bisect a ``<pre>`` tag, cut an entity mid-sequence (``&am``), or leave
+    a ``<pre>``/``<b>`` unclosed. Instead we cut only at a boundary that is not
+    inside a ``<...>`` tag or an ``&...;`` entity, then re-close any tags still
+    open at the cut so the message parses.
+    """
     if len(body) <= max_chars:
         return body
-    return body[: max_chars - 20].rstrip() + "\n…(truncated)"
+
+    # Spans the cut must never land inside: HTML tags and entities.
+    forbidden = sorted(
+        [m.span() for m in _TAG_RE.finditer(body)]
+        + [m.span() for m in _ENTITY_RE.finditer(body)]
+    )
+
+    def safe_cut(limit: int) -> int:
+        cut = max(0, min(limit, len(body)))
+        for start, end in forbidden:
+            if start >= cut:
+                break
+            if start < cut < end:  # cut would fall inside this tag/entity
+                cut = start
+        return cut
+
+    def open_tags(upto: int) -> list[str]:
+        stack: list[str] = []
+        for m in _TAG_RE.finditer(body):
+            if m.start() >= upto:
+                break
+            closing, name = m.group(1), m.group(2).lower()
+            if closing:
+                for i in range(len(stack) - 1, -1, -1):
+                    if stack[i] == name:
+                        del stack[i]
+                        break
+            elif not m.group(0).rstrip().endswith("/>"):
+                stack.append(name)
+        return stack
+
+    # Two passes: reserve the marker, then also reserve the closing tags that the
+    # chosen cut implies. The second cut is <= the first, so its open-tag set is a
+    # subset and the final length stays within max_chars.
+    cut = safe_cut(max_chars - len(_TRUNCATE_MARKER))
+    closing = "".join(f"</{t}>" for t in reversed(open_tags(cut)))
+    cut = safe_cut(max_chars - len(_TRUNCATE_MARKER) - len(closing))
+    closing = "".join(f"</{t}>" for t in reversed(open_tags(cut)))
+
+    return body[:cut].rstrip() + _TRUNCATE_MARKER + closing
