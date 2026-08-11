@@ -180,64 +180,29 @@ def _previous_quarter(qkey: str) -> str:
     return f"{q - 1}Q{y}"
 
 
-def fetch_rates(quarter: str, fuel: str = "diesel", *, force: bool = False) -> RateTable:
-    """Fetch a quarter's IFTA rate matrix, with graceful fallback.
+class RateMatrixInvalidError(Exception):
+    """A fetched response didn't parse as a plausible IFTA rate matrix."""
 
-    If the requested quarter isn't published on iftach.org yet (common
-    early in a new quarter), falls back to the most recent published
-    quarter and prints a warning. The returned RateTable still carries
-    the requested `quarter` label so downstream output is consistent.
-    """
-    requested_url, qkey = _quarter_url(quarter)
-    fuel_col = FUEL_COLUMNS.get(fuel.lower().replace(" ", "_"))
-    if fuel_col is None:
-        raise ValueError(f"unknown fuel: {fuel}")
 
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = CACHE_DIR / f"{qkey}.csv"
-    source_qkey = qkey
-    warning: str | None = None
-    if force or not cache_path.exists():
-        try:
-            resp = requests.get(requested_url, timeout=30)
-            resp.raise_for_status()
-            cache_path.write_bytes(resp.content)
-        except requests.HTTPError as e:
-            if getattr(e.response, "status_code", None) != 404:
-                raise
-            # 404 — quarter not published yet. Walk backward up to 3 quarters
-            # looking for a cached or fetchable matrix.
-            fallback = _previous_quarter(qkey)
-            for _ in range(3):
-                fb_path = CACHE_DIR / f"{fallback}.csv"
-                if fb_path.exists():
-                    print(f"  ⚠ {qkey} not published yet — falling back to cached {fallback}")
-                    cache_path = fb_path
-                    source_qkey = fallback
-                    break
-                fb_url, _ = _quarter_url(fallback)
-                try:
-                    resp = requests.get(fb_url, timeout=30)
-                    resp.raise_for_status()
-                    fb_path.write_bytes(resp.content)
-                    print(f"  ⚠ {qkey} not published yet — fetched {fallback} instead")
-                    cache_path = fb_path
-                    source_qkey = fallback
-                    break
-                except requests.HTTPError:
-                    fallback = _previous_quarter(fallback)
-            else:
-                raise RuntimeError(
-                    f"No IFTA rate matrix available for {qkey} or the 3 prior quarters."
-                ) from e
+# A real IFTA matrix carries every member jurisdiction (58 US states/provinces
+# in the current agreement; the seeded files parse to 57 priced rows for
+# diesel, Oregon being intentionally rate-free). A maintenance/WAF HTML page or
+# a truncated CSV parses to far fewer. Anything under this floor is rejected
+# rather than cached, because `cache_path.exists()` short-circuits every later
+# fetch — one bad response would otherwise poison the quarter permanently and
+# compute $0 tax for the missing jurisdictions.
+_MIN_PLAUSIBLE_JURISDICTIONS = 50
 
-    if source_qkey != qkey:
-        warning = (
-            f"{qkey} IFTA rates were not published, so calculations used {source_qkey} "
-            "rates. Do not file until the current-quarter rate matrix is confirmed."
-        )
 
-    raw = cache_path.read_text(encoding="utf-8-sig", errors="replace")
+def _is_404(exc: Exception) -> bool:
+    return (
+        isinstance(exc, requests.HTTPError)
+        and getattr(exc.response, "status_code", None) == 404
+    )
+
+
+def _parse_matrix(raw: str, fuel_col: int) -> tuple[dict[str, float], dict[str, float]]:
+    """Parse a rate-matrix CSV into (base_rates, surcharges)."""
     reader = csv.reader(io.StringIO(raw))
     rates: dict[str, float] = {}
     surcharges: dict[str, float] = {}
@@ -264,6 +229,82 @@ def fetch_rates(quarter: str, fuel: str = "diesel", *, force: bool = False) -> R
                 surcharges[pending_state] = rate
             else:
                 rates[pending_state] = rate
+    return rates, surcharges
+
+
+def _download_matrix(url: str, dest: Path, fuel_col: int) -> None:
+    """Fetch a rate matrix and cache it only if it parses as a real one."""
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    raw = resp.content.decode("utf-8-sig", errors="replace")
+    rates, _ = _parse_matrix(raw, fuel_col)
+    if len(rates) < _MIN_PLAUSIBLE_JURISDICTIONS:
+        raise RateMatrixInvalidError(
+            f"{url} returned {len(rates)} priced jurisdictions "
+            f"(expected >= {_MIN_PLAUSIBLE_JURISDICTIONS}) — refusing to cache."
+        )
+    dest.write_bytes(resp.content)
+
+
+def fetch_rates(quarter: str, fuel: str = "diesel", *, force: bool = False) -> RateTable:
+    """Fetch a quarter's IFTA rate matrix, with graceful fallback.
+
+    If the requested quarter isn't published on iftach.org yet (common
+    early in a new quarter), falls back to the most recent published
+    quarter and prints a warning. The returned RateTable still carries
+    the requested `quarter` label so downstream output is consistent.
+    """
+    requested_url, qkey = _quarter_url(quarter)
+    fuel_col = FUEL_COLUMNS.get(fuel.lower().replace(" ", "_"))
+    if fuel_col is None:
+        raise ValueError(f"unknown fuel: {fuel}")
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = CACHE_DIR / f"{qkey}.csv"
+    source_qkey = qkey
+    warning: str | None = None
+    if force or not cache_path.exists():
+        try:
+            _download_matrix(requested_url, cache_path, fuel_col)
+        except (requests.RequestException, RateMatrixInvalidError) as e:
+            # The requested quarter is unusable — not published yet (404), the
+            # site is unreachable, or it served something that isn't a rate
+            # matrix. Any of these must degrade to the prior quarter rather
+            # than crash: the caller still gets a table, flagged DO_NOT_FILE
+            # via `warning`. (Previously only a 404 was handled, so an
+            # iftach.org outage failed the whole submission even with a
+            # perfectly good cached quarter sitting on disk.)
+            reason = "not published yet" if _is_404(e) else f"unavailable ({e})"
+            fallback = _previous_quarter(qkey)
+            for _ in range(3):
+                fb_path = CACHE_DIR / f"{fallback}.csv"
+                if fb_path.exists():
+                    print(f"  ⚠ {qkey} {reason} — falling back to cached {fallback}")
+                    cache_path = fb_path
+                    source_qkey = fallback
+                    break
+                fb_url, _ = _quarter_url(fallback)
+                try:
+                    _download_matrix(fb_url, fb_path, fuel_col)
+                    print(f"  ⚠ {qkey} {reason} — fetched {fallback} instead")
+                    cache_path = fb_path
+                    source_qkey = fallback
+                    break
+                except (requests.RequestException, RateMatrixInvalidError):
+                    fallback = _previous_quarter(fallback)
+            else:
+                raise RuntimeError(
+                    f"No IFTA rate matrix available for {qkey} or the 3 prior quarters."
+                ) from e
+
+    if source_qkey != qkey:
+        warning = (
+            f"{qkey} IFTA rates were not published, so calculations used {source_qkey} "
+            "rates. Do not file until the current-quarter rate matrix is confirmed."
+        )
+
+    raw = cache_path.read_text(encoding="utf-8-sig", errors="replace")
+    rates, surcharges = _parse_matrix(raw, fuel_col)
     return RateTable(
         quarter=qkey,
         fuel=fuel,

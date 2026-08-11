@@ -54,3 +54,6 @@ class Submission:
     # Telegram approval card so we can edit it in place on decision.
     telegram_message_id: int | None = None
     telegram_chat_id: int | None = None
+    # How many times a worker has claimed this submission. Incremented on
+    # claim, so a job that keeps dying mid-run can't be retried forever.
+    attempts: int = 0
