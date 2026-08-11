@@ -423,10 +423,19 @@ def scaffold_client(
         )
 
     client_dir = project_root / "data" / "clients" / norm
-    if client_dir.exists() and (client_dir / "client.json").exists():
+    # Refuse if the directory already holds ANY client artifact, not just
+    # client.json — a dir with profile.json/history.json but no client.json
+    # belongs to a partially-set-up client, and scaffolding would clobber it.
+    existing_artifacts = [
+        name
+        for name in ("client.json", "profile.json", "history.json")
+        if (client_dir / name).exists()
+    ]
+    if existing_artifacts:
         raise ScaffoldError(
-            f"Client '{norm}' already exists at {client_dir}. "
-            "Edit client.json directly to update."
+            f"Client directory '{norm}' already contains "
+            f"{', '.join(existing_artifacts)} at {client_dir}. Edit those files "
+            "directly to update, or remove the directory before re-scaffolding."
         )
     client_dir.mkdir(parents=True, exist_ok=True)
 
