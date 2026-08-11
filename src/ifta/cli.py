@@ -932,25 +932,61 @@ def receipt_eval_report(
     type=click.Path(path_type=Path),
     help="Backup dir. Default $IFTA_BACKUP_DIR or /Volumes/DISK/AI/ifta-backups.",
 )
-@click.option("--keep", default=14, show_default=True, help="Dated snapshots to retain.")
-def backup(dest: Path | None, keep: int) -> None:
-    """Snapshot data/ (customer state) to a dated .tar.gz and prune old ones."""
-    from ifta.backup import backup_data, list_snapshots
+@click.option(
+    "--keep",
+    default=None,
+    type=int,
+    help="Dated snapshots to retain, locally and in R2. Default $IFTA_BACKUP_KEEP or 3.",
+)
+@click.option(
+    "--no-remote",
+    is_flag=True,
+    help="Skip the Cloudflare R2 upload even when it is configured.",
+)
+def backup(dest: Path | None, keep: int | None, no_remote: bool) -> None:
+    """Snapshot data/ (customer state), replicate to R2, and prune old ones."""
+    from ifta.backup import run_backup
 
     try:
-        snapshot = backup_data(PROJECT_ROOT, dest, keep=keep)
+        result = run_backup(PROJECT_ROOT, dest, keep=keep, replicate=not no_remote)
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
-    size_kb = snapshot.stat().st_size / 1024
-    console.print(f"[green]✓[/] backup: {snapshot} [dim]({size_kb:.0f} KB)[/]")
-    console.print(f"[dim]{len(list_snapshots(dest))} snapshot(s) retained in {snapshot.parent}[/]")
+    size_kb = result.snapshot.stat().st_size / 1024
+    store = "postgres dump" if result.included_pg_dump else "sqlite"
+    console.print(f"[green]✓[/] backup: {result.snapshot} [dim]({size_kb:.0f} KB, {store})[/]")
+    console.print(
+        f"[dim]{result.local_kept} snapshot(s) retained in {result.snapshot.parent}[/]"
+    )
+    if result.remote_key:
+        console.print(f"[green]✓[/] replicated to R2: [dim]{result.remote_key}[/]")
+        if result.remote_pruned:
+            console.print(f"[dim]pruned {len(result.remote_pruned)} old remote snapshot(s)[/]")
+    elif not no_remote:
+        console.print("[yellow]![/] R2 not configured — this snapshot never left the box.")
 
 
 @main.command(name="backup-list")
 @click.option("--dest", default=None, type=click.Path(path_type=Path))
-def backup_list(dest: Path | None) -> None:
+@click.option("--remote", is_flag=True, help="List the Cloudflare R2 copies instead.")
+def backup_list(dest: Path | None, remote: bool) -> None:
     """List available data snapshots, newest last."""
     from ifta.backup import list_snapshots
+    from ifta.backup_remote import RemoteConfig, list_remote
+
+    if remote:
+        config = RemoteConfig.from_env()
+        if config is None:
+            raise click.ClickException(
+                "Cloudflare R2 is not configured — set IFTA_BACKUP_R2_* (see docs/ORACLE.md)."
+            )
+        keys = list_remote(config)
+        if not keys:
+            console.print(f"[yellow]No snapshots in r2://{config.bucket}/{config.prefix}[/]")
+            return
+        for key in keys:
+            console.print(f"  {key}")
+        console.print(f"\n[dim]{len(keys)} snapshot(s) in r2://{config.bucket}[/]")
+        return
 
     snaps = list_snapshots(dest)
     if not snaps:
@@ -959,6 +995,39 @@ def backup_list(dest: Path | None) -> None:
     for snap in snaps:
         console.print(f"  {snap.name}  [dim]({snap.stat().st_size / 1024:.0f} KB)[/]")
     console.print(f"\n[dim]{len(snaps)} snapshot(s) in {snaps[0].parent}[/]")
+
+
+@main.command(name="backup-fetch")
+@click.option(
+    "--key",
+    default=None,
+    help="R2 object key to download. Defaults to the newest snapshot in the bucket.",
+)
+@click.option(
+    "--into",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Directory to download into. Defaults to the local backup dir.",
+)
+def backup_fetch(key: str | None, into: Path | None) -> None:
+    """Download a snapshot from Cloudflare R2 (for a restore on a fresh box)."""
+    from ifta.backup import backup_dir
+    from ifta.backup_remote import RemoteConfig, download_snapshot, list_remote
+
+    config = RemoteConfig.from_env()
+    if config is None:
+        raise click.ClickException(
+            "Cloudflare R2 is not configured — set IFTA_BACKUP_R2_* (see docs/ORACLE.md)."
+        )
+    if key is None:
+        keys = list_remote(config)
+        if not keys:
+            raise click.ClickException(f"no snapshots in r2://{config.bucket}/{config.prefix}")
+        key = keys[-1]  # keys sort chronologically; newest last
+    target = into if into is not None else backup_dir(None)
+    local = download_snapshot(key, target, config)
+    console.print(f"[green]✓[/] fetched {key} → {local}")
+    console.print(f"[dim]Restore with: ifta backup-restore --snapshot {local}[/]")
 
 
 @main.command(name="backup-restore")

@@ -202,11 +202,12 @@ src/ifta/
    ├─ telegram_approval.py # operator approval gate
    ├─ turnstile.py         # CAPTCHA   email.py  models.py  intake_brief.py
 
-docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · BENCHMARK · JUDGE · TRACING
+docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · ORACLE (deploy) · AZURE · BENCHMARK · JUDGE · TRACING
+deploy/      oracle/ (compose + systemd, current prod) · launchd/ (Mac mini) · azure/ (Bicep)
 evals/       benchmark history, cases, receipt eval reports (PII receipts git-ignored)
 data/        regulations KB · cached rate matrices · per-client history (git-ignored)
 ifta-portfolio/CASE-STUDY.md
-tests/       38 files, 429 tests — incl. penny-accurate regression vs. real filings
+tests/       40 files, 446 tests — incl. penny-accurate regression vs. real filings
 ```
 
 ## The AI agent (Phase 2)

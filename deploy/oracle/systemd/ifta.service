@@ -1,0 +1,34 @@
+# IFTA production stack. Installed to /etc/systemd/system/ by
+# deploy/oracle/install.sh, which substitutes __PROJECT_ROOT__.
+#
+#   systemctl status ifta
+#   systemctl restart ifta
+#   journalctl -u ifta -f
+#
+# Type=oneshot + RemainAfterExit: systemd owns start/stop, while Docker's own
+# `restart: unless-stopped` handles per-container crashes. Making this a
+# long-running unit instead would fight Docker for restart duties.
+
+[Unit]
+Description=IFTA filing pipeline (docker compose stack)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__PROJECT_ROOT__/deploy/oracle
+EnvironmentFile=__PROJECT_ROOT__/deploy/oracle/.env
+
+# Pull the tunnel/postgres base images but keep going if the registry is
+# unreachable — a network blip at boot must not strand the stack down.
+ExecStartPre=-/usr/bin/docker compose pull --quiet --ignore-buildable
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+
+# Compose builds the image on first start; give it room on a small box.
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

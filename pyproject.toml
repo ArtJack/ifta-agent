@@ -43,6 +43,13 @@ dev = [
 azure = [
     "psycopg[binary]>=3.2",
 ]
+# Oracle Linux production runtime: the same Postgres backend, plus boto3 for
+# replicating nightly snapshots to Cloudflare R2 (S3-compatible). Kept separate
+# from `azure` so neither deployment carries the other's dependencies.
+oracle = [
+    "psycopg[binary]>=3.2",
+    "boto3>=1.34",
+]
 
 [project.scripts]
 ifta = "ifta.cli:main"

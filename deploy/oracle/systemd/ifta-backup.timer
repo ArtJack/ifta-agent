@@ -1,0 +1,19 @@
+# Fires ifta-backup.service nightly at 03:30 local time.
+#
+#   systemctl list-timers ifta-backup
+#
+# Persistent=true so a snapshot missed while the box was off runs on next boot
+# rather than silently leaving a gap in the retention window.
+
+[Unit]
+Description=Nightly IFTA data snapshot
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+# Spread load and avoid hammering R2 at exactly the same second every night.
+RandomizedDelaySec=300
+Unit=ifta-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,11 @@
 # IFTA on Azure — deployment runbook
 
+> **Superseded.** Production has moved to the Oracle Linux box — see
+> [`docs/ORACLE.md`](ORACLE.md), which also covers migrating the data off Azure
+> and tearing the resource group down. The Azure credit expires **2026-10-09**.
+> This document remains the record of how the Azure stack was built and a
+> migration-back path.
+
 Production runbook for landing the IFTA pipeline on Azure Container Apps with a
 managed Postgres job store. Mirrors the single-host runbook in
 [`deploy/README.md`](../deploy/README.md); the infrastructure itself is defined
