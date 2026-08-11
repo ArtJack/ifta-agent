@@ -1,7 +1,7 @@
 # IFTA Agent — quarterly fuel-tax filing pipeline with an LLM review agent
 
 **Status:** in production, filing every quarter for a real carrier (DM Express) ·
-**429 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
+**535 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
 
 > Carriers drop in their messy mileage + fuel-card exports; minutes later they get a
 > filing-ready IFTA packet that an LLM agent has reviewed against the regulations and their
@@ -178,13 +178,14 @@ If current-quarter rates are unavailable, the bot marks the packet as
 
 ## Project layout
 
-**44 Python modules · 16k LOC · 429 tests across 38 files.** Layered by responsibility:
+**47 Python modules · 18k LOC · 535 tests across 45 files.** Layered by responsibility:
 
 ```
 src/ifta/
 ├─ cli.py                  # Click CLI: run | review | ask | chat | telegram-bot | rates
 ├─ models.py               # canonical data model + jurisdiction sets
 │  ── deterministic pipeline (the math) ──
+├─ quarter.py              # compute_quarter() — the ONE core every customer path calls
 ├─ ingest.py               # CSV / Excel / PDF parsers
 ├─ rates.py                # IFTA rate-matrix fetcher + cache (iftach.org)
 ├─ calc.py                 # fleet-MPG, taxable gallons, surcharge math
@@ -207,7 +208,7 @@ deploy/      oracle/ (compose + systemd, current prod) · launchd/ (Mac mini) ·
 evals/       benchmark history, cases, receipt eval reports (PII receipts git-ignored)
 data/        regulations KB · cached rate matrices · per-client history (git-ignored)
 ifta-portfolio/CASE-STUDY.md
-tests/       40 files, 446 tests — incl. penny-accurate regression vs. real filings
+tests/       45 files, 535 tests — incl. penny-accurate regression vs. real filings
 ```
 
 ## The AI agent (Phase 2)
