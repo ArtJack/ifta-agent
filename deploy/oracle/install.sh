@@ -92,7 +92,7 @@ if [[ "$mode" != "600" ]]; then
     warn ".env is mode $mode — tightening to 600 (it holds the DB password and API keys)"
     chmod 600 "$ENV_FILE"
 fi
-for required in POSTGRES_PASSWORD ANTHROPIC_API_KEY RESEND_API_KEY CLOUDFLARE_TUNNEL_TOKEN; do
+for required in POSTGRES_PASSWORD ANTHROPIC_API_KEY RESEND_API_KEY; do
     value="$(env_value "$required")"
     [[ -n "$value" && "$value" != REPLACE* ]] || die "$required is unset or still a placeholder in $ENV_FILE"
 done

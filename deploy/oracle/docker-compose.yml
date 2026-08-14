@@ -54,6 +54,19 @@ x-app-env: &app-env
   # is ignored and every customer shares one rate-limit bucket.
   FORWARDED_ALLOW_IPS: "*"
   TZ: ${TZ:-UTC}
+  # --- carried over from the Mac mini launchd deployment -------------------
+  # These are read by the code but were absent from this file, so a migration
+  # without them would silently change behaviour (different Claude model for
+  # the bot, no one-click link in confirmation emails). The numeric ones carry
+  # defaults because the code does int()/float() on them -- an empty string
+  # raises ValueError, whereas an unset var falls back to the code default.
+  IFTA_PUBLIC_SITE_URL: ${IFTA_PUBLIC_SITE_URL:-}
+  TELEGRAM_AGENT_MODEL: ${TELEGRAM_AGENT_MODEL:-claude-sonnet-4-6}
+  TELEGRAM_AGENT_EFFORT: ${TELEGRAM_AGENT_EFFORT:-medium}
+  TELEGRAM_AGENT_MAX_TOKENS: ${TELEGRAM_AGENT_MAX_TOKENS:-2048}
+  TELEGRAM_MAX_FILE_MB: ${TELEGRAM_MAX_FILE_MB:-20}
+  TELEGRAM_SKIP_AGENT: ${TELEGRAM_SKIP_AGENT:-0}
+
 
 x-app-build: &app-build
   context: ../..
@@ -137,10 +150,18 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    # Remotely-managed tunnel: ingress (ifta-api.artjeck.com -> http://web:8000)
-    # is configured in the Cloudflare dashboard, so there is no config file or
-    # credentials JSON to place on the box. No inbound port is ever opened.
-    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:?}"]
+    # ADAPTED from the runbook: instead of a remotely-managed dashboard tunnel,
+    # this reuses the existing locally-managed `ifta-api` tunnel relocated from
+    # the Mac mini. DNS is therefore never touched -- the CNAME already points
+    # at this tunnel UUID. Ingress lives in /etc/cloudflared/config.yml.
+    #
+    # Gated behind the `tunnel` profile so the stack can be built, migrated and
+    # verified without taking production traffic. Enable at cutover by setting
+    # COMPOSE_PROFILES=tunnel in .env, which the systemd unit passes through.
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - /etc/cloudflared:/etc/cloudflared:ro
+    profiles: ["tunnel"]
     depends_on:
       - web
 
