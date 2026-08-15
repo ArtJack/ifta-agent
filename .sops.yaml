@@ -1,0 +1,16 @@
+# Which age recipients can encrypt/decrypt which files.
+#
+# NOTE the regex matches the *input* being encrypted (deploy/oracle/.env), not
+# the .env.sops output — sops applies creation rules to what you feed it.
+# Decryption needs no rule at all: the recipients are embedded in the encrypted
+# file itself. `.env.example` is untouched because it does not end in `.env`.
+#
+# Only VALUES are encrypted in dotenv mode; keys stay readable, so a diff shows
+# which secret changed without revealing any of them.
+#
+# The matching private key is /root/.config/sops/age/keys.txt on the box (0600).
+# That one file is now the thing to protect: lose it and every .env.sops here is
+# unrecoverable. It belongs in the password manager.
+creation_rules:
+  - path_regex: \.env$
+    age: age1l9r2f5wt9sd65e9tv0edxme5uuhy6thym3zm0nmsasqla9xrpudqe99sge
