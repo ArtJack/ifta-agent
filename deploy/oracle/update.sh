@@ -28,7 +28,21 @@ ok "snapshot taken"
 
 if [[ $PULL -eq 1 ]]; then
     say "pulling latest code"
-    git -C "$PROJECT_ROOT" pull --ff-only
+    # Pull as whoever owns the checkout, not as root. Git authentication is
+    # per-user: if the repo is owned by a deploy user whose ~/.ssh holds the
+    # GitHub key, pulling as root finds no key and dies with "Host key
+    # verification failed" -- an error that reads like a network fault and
+    # sends you looking in entirely the wrong place.
+    #
+    # Only this line drops privileges; the Docker work below still needs root.
+    # When root owns the checkout (an all-root install), this is a no-op and
+    # behaves exactly as before.
+    repo_owner="$(stat -c %U "$PROJECT_ROOT")"
+    if [[ "$repo_owner" != "root" ]]; then
+        sudo -u "$repo_owner" git -C "$PROJECT_ROOT" pull --ff-only
+    else
+        git -C "$PROJECT_ROOT" pull --ff-only
+    fi
 fi
 
 say "rebuilding image"
