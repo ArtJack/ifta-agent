@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -53,9 +54,19 @@ CREATE TABLE IF NOT EXISTS submissions (
     decided_by TEXT,
     decline_reason TEXT,
     telegram_message_id BIGINT,
-    telegram_chat_id BIGINT
+    telegram_chat_id BIGINT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT
 )
 """
+
+# Forward-only migrations for databases created before a column existed.
+# Postgres supports IF NOT EXISTS here, so this is a plain idempotent DDL list
+# (the SQLite backend has to inspect PRAGMA table_info instead).
+_MIGRATIONS = (
+    "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS next_attempt_at TEXT",
+)
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_status ON submissions(status)",
@@ -77,7 +88,7 @@ def _dsn() -> str:
 
 
 @contextmanager
-def _connect() -> Iterator[psycopg.Connection]:
+def _connect() -> Iterator[psycopg.Connection[dict[str, Any]]]:
     """One connection per call, committed on clean exit (mirrors SQLite backend)."""
     conn = psycopg.connect(_dsn(), row_factory=dict_row)
     try:
@@ -91,6 +102,8 @@ def init_db(path: Path) -> None:
     """Create the schema (idempotent). ``path`` is ignored (signature parity)."""
     with _connect() as conn:
         conn.execute(_CREATE_TABLE)
+        for stmt in _MIGRATIONS:
+            conn.execute(stmt)
         for stmt in _CREATE_INDEXES:
             conn.execute(stmt)
 
@@ -185,7 +198,7 @@ def confirm_submission(path: Path, token: str) -> Submission | None:
         row = conn.execute(
             "SELECT * FROM submissions WHERE confirm_token = %s", (token,)
         ).fetchone()
-    return _row_to_submission(row)
+    return _row_to_submission(row) if row else None
 
 
 def mark_packet_sent(path: Path, submission_id: str) -> None:
@@ -207,22 +220,27 @@ def claim_next_queued(path: Path) -> Submission | None:
     """
     started_at = _now_iso()
     with _connect() as conn:
+        # next_attempt_at holds a retry back-off deadline. Timestamps are
+        # ISO-8601 UTC of fixed width, so the string comparison is chronological
+        # (the same property `started_at <` already relies on).
         row = conn.execute(
             "SELECT id FROM submissions WHERE status = %s"
+            " AND (next_attempt_at IS NULL OR next_attempt_at <= %s)"
             " ORDER BY created_at ASC LIMIT 1"
             " FOR UPDATE SKIP LOCKED",
-            (SubmissionStatus.QUEUED.value,),
+            (SubmissionStatus.QUEUED.value, started_at),
         ).fetchone()
         if row is None:
             return None
         conn.execute(
-            "UPDATE submissions SET status = %s, started_at = %s WHERE id = %s",
+            "UPDATE submissions SET status = %s, started_at = %s,"
+            " attempts = attempts + 1 WHERE id = %s",
             (SubmissionStatus.RUNNING.value, started_at, row["id"]),
         )
         claimed = conn.execute(
             "SELECT * FROM submissions WHERE id = %s", (row["id"],)
         ).fetchone()
-    return _row_to_submission(claimed)
+    return _row_to_submission(claimed) if claimed else None
 
 
 def mark_done(path: Path, submission_id: str) -> None:
@@ -258,6 +276,47 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
                 SubmissionStatus.FAILED.value,
             ),
         )
+
+
+def requeue_for_retry(
+    path: Path,
+    submission_id: str,
+    *,
+    error: str,
+    from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+    delay_seconds: float = 0.0,
+) -> Submission | None:
+    """Put a submission back on the queue after a transient failure.
+
+    Mirror of the SQLite backend: the row keeps its attempts count so the
+    worker eventually stops retrying, and `delay_seconds` holds it back from
+    the queue so the retry outlives the fault it is retrying. Returns None if
+    it already moved on.
+    """
+    next_attempt_at = (
+        (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
+        if delay_seconds > 0
+        else None
+    )
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = %s, started_at = NULL, error = %s,"
+            " next_attempt_at = %s"
+            " WHERE id = %s AND status = %s",
+            (
+                SubmissionStatus.QUEUED.value,
+                error[:4000],
+                next_attempt_at,
+                submission_id,
+                from_status.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = %s", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row is not None else None
 
 
 def reap_stale_running(
@@ -474,4 +533,6 @@ def _row_to_submission(row: dict) -> Submission:
         decline_reason=row["decline_reason"],
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
+        attempts=row.get("attempts") or 0,
+        next_attempt_at=_dt(row.get("next_attempt_at")),
     )

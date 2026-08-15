@@ -44,14 +44,20 @@ def _ret(
     miles: float = 1000.0,
     gallons: float = 150.0,
     warning: str | None = None,
+    rate_fallback_used: bool = False,
 ) -> SimpleNamespace:
-    """Stand-in for IftaReturn — we only read the few attributes used here."""
+    """Stand-in for IftaReturn — mirrors the fields the renderers read.
+
+    `rate_fallback_used` matters because the renderers now derive the filing
+    status from the deterministic gate when no agent note is present.
+    """
     return SimpleNamespace(
         total_tax_due=tax,
         fleet_mpg=mpg,
         fleet_miles=miles,
         fleet_gallons=gallons,
         rate_warning=warning,
+        rate_fallback_used=rate_fallback_used,
     )
 
 
@@ -196,11 +202,46 @@ def test_fallback_uses_findings_when_no_agent_note() -> None:
     a useful customer email from the deterministic validator findings."""
     finding = SimpleNamespace(severity="warning", code="MPG_HIGH", message="Fleet MPG 14.27 is above 10.5 — likely missing fuel purchases.")
     body = render_customer_view(sub=_sub(), ret=_ret(mpg=14.27), findings=[finding])
-    assert "Please review the attached files before filing." in body
+    # No agent note → the status comes from the deterministic gate, which reads
+    # a warning-level finding as READY_WITH_WARNINGS.
+    assert "Please double-check the items below before filing." in body
     # The finding's plain message is what shows.
     assert "Fleet MPG 14.27 is above 10.5" in body
     # Still no dev markup.
     assert "MPG_HIGH" not in body
+
+
+def test_error_findings_block_filing_without_an_agent_note() -> None:
+    """An error-level finding must read as DO-NOT-FILE even when the agent
+    never ran.
+
+    The validator raises MPG_HIGH/MPG_LOW/MPG_ZERO at severity 'error'
+    precisely to stop a filing built on missing fuel or missing miles. When the
+    AI review is skipped (no API key, outage, or the kill switch) `note` is
+    None — and the customer used to be told the packet was simply ready.
+    """
+    finding = SimpleNamespace(
+        severity="error",
+        code="MPG_HIGH",
+        message="Fleet MPG 14.27 is above the realistic ceiling of 10.5.",
+    )
+    body = render_customer_view(sub=_sub(), ret=_ret(mpg=14.27), findings=[finding])
+    assert "please don't file yet" in body.lower()
+
+    summary = render_customer_summary(sub=_sub(), ret=_ret(mpg=14.27), findings=[finding])
+    assert "Do NOT file yet" in summary
+    assert "Status: Ready to file" not in summary
+
+
+def test_rate_fallback_blocks_filing_without_an_agent_note() -> None:
+    """Unconfirmed current-quarter rates block filing on the deterministic
+    path too, not only when the agent supplies a status."""
+    summary = render_customer_summary(
+        sub=_sub(),
+        ret=_ret(warning="Q3-2026 rates unavailable — used Q2-2026.", rate_fallback_used=True),
+        findings=[],
+    )
+    assert "Do NOT file yet" in summary
 
 
 def test_fallback_filters_info_findings() -> None:

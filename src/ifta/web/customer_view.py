@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ifta.calc import IftaReturn
+from ifta.review_packet import determine_filing_status
 from ifta.validator import Finding
 from ifta.web.models import Submission
 
@@ -46,6 +47,17 @@ _FILING_STATUS_LINE = {
     "READY_WITH_WARNINGS": "Please double-check the items below before filing.",
     "DO_NOT_FILE": "We found issues — please don't file yet. See below.",
 }
+
+# The opening sentence must agree with the gate. It used to read "Your <Q> IFTA
+# packet is ready." unconditionally, so a DO_NOT_FILE return led with
+# "…is ready. We found issues — please don't file yet." — and the first
+# sentence is the one a customer acts on.
+_FILING_LEAD = {
+    "READY_TO_FILE": "Your {quarter} IFTA packet is ready.",
+    "READY_WITH_WARNINGS": "Your {quarter} IFTA packet is ready.",
+    "DO_NOT_FILE": "Your {quarter} IFTA packet needs attention before you file.",
+}
+_FILING_LEAD_FALLBACK = "Your {quarter} IFTA packet is attached."
 
 
 @dataclass(frozen=True)
@@ -76,9 +88,7 @@ def _describe_attachment(name: str) -> str:
     return ""
 
 
-def _attachment_pairs(
-    attached_files: list[str] | None, truck_count: int
-) -> list[tuple[str, str]]:
+def _attachment_pairs(attached_files: list[str] | None, truck_count: int) -> list[tuple[str, str]]:
     """(name, description) rows for the packet's attachment list.
 
     `attached_files` carries the REAL customer-facing filenames (e.g.
@@ -126,10 +136,11 @@ def render_customer_view(
     the real attachment filenames so the list shows e.g. 'truck_55.xlsx'.
     """
     greeting = f"Hi {sub.name}," if sub.name else "Hi,"
-    status_blurb = _status_blurb(note)
+    status_blurb = _status_blurb(note, ret, findings)
+    blocked = effective_filing_status(note, ret, findings) == "DO_NOT_FILE"
 
     lines: list[str] = [greeting, ""]
-    lines.append(f"Your {sub.quarter} IFTA packet is ready. {status_blurb}")
+    lines.append(f"{_lead_sentence(sub.quarter, note, ret, findings)} {status_blurb}")
     lines.append("")
     lines.append(f"Total tax due: ${ret.total_tax_due:,.2f}")
     lines.append(f"Fleet MPG: {ret.fleet_mpg:.2f}")
@@ -137,7 +148,11 @@ def render_customer_view(
 
     actions = _collect_actions(note=note, findings=findings)
     if actions:
-        lines.append("Before you file, please double-check:")
+        lines.append(
+            "Please resolve these before filing:"
+            if blocked
+            else "Before you file, please double-check:"
+        )
         for a in actions:
             lines.append(f"• {a.text}")
         lines.append("")
@@ -177,10 +192,12 @@ def render_customer_view_html(
     greeting = f"Hi {esc(sub.name)}," if sub.name else "Hi,"
     actions = _collect_actions(note=note, findings=findings)
 
+    blocked = effective_filing_status(note, ret, findings) == "DO_NOT_FILE"
+
     p: list[str] = [f'<p style="margin:0 0 16px">{greeting}</p>']
     p.append(
-        f'<p style="margin:0 0 16px">Your <strong>{esc(sub.quarter)}</strong> IFTA '
-        f"packet is ready. {esc(_status_blurb(note))}</p>"
+        f'<p style="margin:0 0 16px">{esc(_lead_sentence(sub.quarter, note, ret, findings))} '
+        f"{esc(_status_blurb(note, ret, findings))}</p>"
     )
     p.append(
         '<table role="presentation" cellpadding="0" cellspacing="0" '
@@ -192,7 +209,15 @@ def render_customer_view_html(
         "</table>"
     )
     if actions:
-        p.append('<p style="margin:0 0 8px;font-weight:600">Before you file, please double-check:</p>')
+        p.append(
+            '<p style="margin:0 0 8px;font-weight:600">'
+            + (
+                "Please resolve these before filing:"
+                if blocked
+                else "Before you file, please double-check:"
+            )
+            + "</p>"
+        )
         p.append('<ul style="margin:0 0 20px;padding-left:22px">')
         p += [f'<li style="margin:0 0 6px">{esc(a.text)}</li>' for a in actions]
         p.append("</ul>")
@@ -204,7 +229,9 @@ def render_customer_view_html(
     p.append('<p style="margin:0 0 8px;font-weight:600">Attached:</p>')
     p.append('<ul style="margin:0 0 20px;padding-left:22px">')
     for name, desc in _attachment_pairs(attached_files, truck_count):
-        label = f'<code style="background:#f1f4f7;padding:1px 5px;border-radius:4px">{esc(name)}</code>'
+        label = (
+            f'<code style="background:#f1f4f7;padding:1px 5px;border-radius:4px">{esc(name)}</code>'
+        )
         p.append(f'<li style="margin:0 0 6px">{label}{(" — " + esc(desc)) if desc else ""}</li>')
     p.append("</ul>")
     p.append(
@@ -218,7 +245,7 @@ def render_customer_view_html(
         '<body style="margin:0;background:#eef1f4;padding:24px 12px">'
         '<div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;'
         "padding:28px 30px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
-        "Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#16212e\">"
+        'Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#16212e">'
         + "\n".join(p)
         + "</div></body></html>"
     )
@@ -227,16 +254,39 @@ def render_customer_view_html(
 # ─── internals ────────────────────────────────────────────────────────────────
 
 
-def _status_blurb(note: Any | None) -> str:
-    if note is None:
-        return "Please review the attached files before filing."
+def effective_filing_status(
+    note: Any | None, ret: IftaReturn, findings: list[Finding] | None
+) -> str:
+    """Filing status to show the customer.
+
+    Prefers the agent's reviewed status, but falls back to the deterministic
+    gate whenever the AI review didn't run (no API key, API outage, or the
+    IFTA_WEB_SKIP_AGENT kill switch) — in those cases `note` is None. Without
+    the fallback, a packet carrying error-level findings (implausible fleet
+    MPG, no fuel parsed) is presented as plainly "ready", which is exactly the
+    filing the MPG gate exists to stop.
+    """
     status = getattr(note, "filing_status", None) or ""
+    if status:
+        return str(status)
+    return str(determine_filing_status(ret, list(findings or []))["status"])
+
+
+def _status_blurb(note: Any | None, ret: IftaReturn, findings: list[Finding] | None) -> str:
+    status = effective_filing_status(note, ret, findings)
     return _FILING_STATUS_LINE.get(status, "Please review the attached files before filing.")
 
 
-def _collect_actions(
-    *, note: Any | None, findings: list[Finding] | None
-) -> list[_Action]:
+def _lead_sentence(
+    quarter: str, note: Any | None, ret: IftaReturn, findings: list[Finding] | None
+) -> str:
+    """Opening sentence of the packet email, agreeing with the filing gate."""
+    status = effective_filing_status(note, ret, findings)
+    template = _FILING_LEAD.get(status, _FILING_LEAD_FALLBACK)
+    return template.format(quarter=quarter)
+
+
+def _collect_actions(*, note: Any | None, findings: list[Finding] | None) -> list[_Action]:
     """Pull warning/error claims out of an agent note OR validator findings.
 
     Returns a deduped, order-preserving list of plain-English bullets.
@@ -259,11 +309,11 @@ def _collect_actions(
         actions.append(a)
 
     if note is not None:
-        for item in (getattr(note, "issues", None) or []):
+        for item in getattr(note, "issues", None) or []:
             if not _is_actionable(item):
                 continue
             push(_get(item, "claim"))
-        for item in (getattr(note, "next_steps", None) or []):
+        for item in getattr(note, "next_steps", None) or []:
             if not _is_actionable(item):
                 continue
             push(_get(item, "recommended_action") or _get(item, "claim"))
@@ -347,7 +397,7 @@ def render_customer_summary(
     carrier = sub.company or "your company"
     header = f"# IFTA {sub.quarter} Summary Report — {carrier}"
     status_header = _FILING_STATUS_HEADER.get(
-        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+        effective_filing_status(note, ret, findings), "Status: Packet ready"
     )
 
     lines: list[str] = [
@@ -363,7 +413,9 @@ def render_customer_summary(
     lines.append("## Key numbers")
     lines.append("")
     lines.append(f"- **Total tax due:** ${ret.total_tax_due:,.2f}")
-    lines.append(f"- **Fleet MPG:** {ret.fleet_mpg:.2f}  _(realistic range for heavy trucks is roughly 5–8)_")
+    lines.append(
+        f"- **Fleet MPG:** {ret.fleet_mpg:.2f}  _(realistic range for heavy trucks is roughly 5–8)_"
+    )
     lines.append(f"- **Fleet miles:** {ret.fleet_miles:,.0f}")
     lines.append(f"- **Fleet gallons:** {ret.fleet_gallons:,.2f}")
     if truck_count:
@@ -434,7 +486,7 @@ def _structured_problems(
         # Build a map from issue-claim → its next_steps recommended_action so the
         # summary pairs the two without showing them as two separate problems.
         actions_by_claim_key: dict[str, str] = {}
-        for step in (getattr(note, "next_steps", None) or []):
+        for step in getattr(note, "next_steps", None) or []:
             if not _is_actionable(step):
                 continue
             paired_claim = _humanize(_get(step, "claim"))
@@ -442,7 +494,7 @@ def _structured_problems(
             if paired_claim and action:
                 actions_by_claim_key[_norm(paired_claim)] = action
 
-        for issue in (getattr(note, "issues", None) or []):
+        for issue in getattr(note, "issues", None) or []:
             if not _is_actionable(issue):
                 continue
             claim = _humanize(_get(issue, "claim"))
@@ -453,9 +505,8 @@ def _structured_problems(
                 continue
             seen_headlines.add(_norm(headline))
             why = _humanize(_get(issue, "filing_impact"))
-            what_to_do = (
-                actions_by_claim_key.get(_norm(claim))
-                or _humanize(_get(issue, "recommended_action"))
+            what_to_do = actions_by_claim_key.get(_norm(claim)) or _humanize(
+                _get(issue, "recommended_action")
             )
             out.append(
                 {
@@ -472,7 +523,7 @@ def _structured_problems(
                 seen_headlines.add(_norm(_split_first_sentence(what_to_do)[0]))
 
         # Next steps that don't pair with an existing issue → standalone items.
-        for step in (getattr(note, "next_steps", None) or []):
+        for step in getattr(note, "next_steps", None) or []:
             if not _is_actionable(step):
                 continue
             action = _humanize(_get(step, "recommended_action")) or _humanize(_get(step, "claim"))
@@ -508,7 +559,7 @@ def _structured_tips(*, note: Any | None) -> list[str]:
         return []
     tips: list[str] = []
     seen: set[str] = set()
-    for item in (getattr(note, "filing_reminders", None) or []):
+    for item in getattr(note, "filing_reminders", None) or []:
         if not isinstance(item, dict):
             continue
         text = _humanize(_get(item, "claim") or _get(item, "recommended_action"))
@@ -753,7 +804,9 @@ def render_customer_summary_pdf(
         truck_count=truck_count,
         attached_files=attached_files,
     )
-    return _build_pdf(title=f"IFTA {sub.quarter} Summary — {sub.company or 'your company'}", flow=flow)
+    return _build_pdf(
+        title=f"IFTA {sub.quarter} Summary — {sub.company or 'your company'}", flow=flow
+    )
 
 
 def render_customer_failure_report_pdf(*, sub: Submission, error: str) -> bytes:
@@ -798,7 +851,11 @@ def _pdf_styles() -> dict[str, Any]:
     base = getSampleStyleSheet()
     return {
         "title": ParagraphStyle(
-            "Title", parent=base["Title"], fontSize=18, spaceAfter=4, textColor=colors.HexColor("#0a2540")
+            "Title",
+            parent=base["Title"],
+            fontSize=18,
+            spaceAfter=4,
+            textColor=colors.HexColor("#0a2540"),
         ),
         "byline": ParagraphStyle(
             "Byline",
@@ -868,7 +925,7 @@ def _build_summary_flowables(
     s = _pdf_styles()
     carrier = sub.company or "your company"
     status_text = _FILING_STATUS_HEADER.get(
-        getattr(note, "filing_status", "") or "", "Status: Packet ready"
+        effective_filing_status(note, ret, findings), "Status: Packet ready"
     )
 
     flow: list[Any] = [
@@ -901,7 +958,9 @@ def _build_summary_flowables(
             if p["why"]:
                 flow.append(Paragraph(f"<b>Why it matters:</b> {_pdf_escape(p['why'])}", s["body"]))
             if p["what_to_do"]:
-                flow.append(Paragraph(f"<b>What to do:</b> {_pdf_escape(p['what_to_do'])}", s["body"]))
+                flow.append(
+                    Paragraph(f"<b>What to do:</b> {_pdf_escape(p['what_to_do'])}", s["body"])
+                )
 
     tips = _structured_tips(note=note)
     if tips:
@@ -932,9 +991,7 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
     errors, warnings = _humanize_error_sections(error)
 
     flow: list[Any] = [
-        Paragraph(
-            f"IFTA {sub.quarter} — Couldn't Finish Yet ({_pdf_escape(carrier)})", s["title"]
-        ),
+        Paragraph(f"IFTA {sub.quarter} — Couldn't Finish Yet ({_pdf_escape(carrier)})", s["title"]),
         Paragraph(f"Prepared for {_pdf_escape(sub.email)}", s["byline"]),
         Paragraph(
             "We received your files for "
@@ -967,7 +1024,9 @@ def _build_failure_flowables(*, sub: Submission, error: str) -> list[Any]:
             flow.append(Paragraph(f"• {_pdf_escape(text)}", s["bullet"]))
 
     flow.append(Paragraph("What to do next", s["h2"]))
-    flow.append(Paragraph("• Reply to your packet email with the missing or corrected files.", s["bullet"]))
+    flow.append(
+        Paragraph("• Reply to your packet email with the missing or corrected files.", s["bullet"])
+    )
     flow.append(
         Paragraph(
             "• Or re-upload everything at "
@@ -1028,16 +1087,10 @@ def render_more_files_request(
     lines.append("")
     lines.append("How to send what's missing:")
     if add_link:
-        lines.append(
-            f"• One-click upload (no re-typing your details): {add_link}"
-        )
-        lines.append(
-            "• Or just reply to this email with the missing files attached."
-        )
+        lines.append(f"• One-click upload (no re-typing your details): {add_link}")
+        lines.append("• Or just reply to this email with the missing files attached.")
     else:
-        lines.append(
-            "• Reply to this email with the missing files attached — we read every one."
-        )
+        lines.append("• Reply to this email with the missing files attached — we read every one.")
         lines.append("• Or re-upload everything at https://artjeck.com/ifta/submit")
     lines.append("")
     lines.append(
@@ -1045,7 +1098,9 @@ def render_more_files_request(
         "unless you want to. We'll pick up the moment we hear back."
     )
     lines.append("")
-    lines.append("Attached: summary_report.pdf — the full plain-English breakdown for your records.")
+    lines.append(
+        "Attached: summary_report.pdf — the full plain-English breakdown for your records."
+    )
     lines.append("")
     lines.append("— ArtJeck IFTA")
     return "\n".join(lines) + "\n"
@@ -1059,9 +1114,7 @@ def render_more_files_request_pdf(
 ) -> bytes:
     """PDF companion to render_more_files_request — same content as the
     detailed customer report, framed as 'a few more pieces needed'."""
-    flow = _build_more_files_flowables(
-        sub=sub, intake_brief=intake_brief, add_link=add_link
-    )
+    flow = _build_more_files_flowables(sub=sub, intake_brief=intake_brief, add_link=add_link)
     return _build_pdf(
         title=f"IFTA {sub.quarter} — A few more files needed ({sub.company or 'your company'})",
         flow=flow,
@@ -1159,9 +1212,7 @@ _INTAKE_BULLET = re.compile(
 )
 # Presence-only counterpart — used against the whole multi-line brief, where
 # the line-anchored _INTAKE_BULLET regex would fail without re.MULTILINE.
-_HAS_INTAKE_BULLET = re.compile(
-    r"\[(?:ERROR|WARNING|INFO)\]\s+[A-Z][A-Z0-9_]*\s*:", re.IGNORECASE
-)
+_HAS_INTAKE_BULLET = re.compile(r"\[(?:ERROR|WARNING|INFO)\]\s+[A-Z][A-Z0-9_]*\s*:", re.IGNORECASE)
 
 
 def _humanize_intake_brief_lines(brief: str) -> list[str]:
@@ -1201,9 +1252,4 @@ def _pdf_escape(text: str) -> str:
     PDF build, and we never inject untrusted markup ourselves — only the
     explicit tags we build into the template (b, br, font, link).
     """
-    return (
-        str(text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

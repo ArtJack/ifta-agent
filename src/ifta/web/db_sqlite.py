@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS submissions (
     decided_by TEXT,
     decline_reason TEXT,
     telegram_message_id INTEGER,
-    telegram_chat_id INTEGER
+    telegram_chat_id INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_status ON submissions(status);
 CREATE INDEX IF NOT EXISTS idx_confirm_token ON submissions(confirm_token);
@@ -60,6 +62,8 @@ _MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("decline_reason", "TEXT"),
     ("telegram_message_id", "INTEGER"),
     ("telegram_chat_id", "INTEGER"),
+    ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ("next_attempt_at", "TEXT"),
 )
 
 
@@ -218,15 +222,20 @@ def claim_next_queued(path: Path) -> Submission | None:
     """
     started_at = _now_iso()
     with _connect(path) as conn:
+        # next_attempt_at holds a retry back-off deadline. Timestamps are
+        # ISO-8601 UTC of fixed width, so the string comparison is chronological
+        # (the same property `started_at <` already relies on).
         row = conn.execute(
             "SELECT id FROM submissions WHERE status = ?"
+            " AND (next_attempt_at IS NULL OR next_attempt_at <= ?)"
             " ORDER BY created_at ASC LIMIT 1",
-            (SubmissionStatus.QUEUED.value,),
+            (SubmissionStatus.QUEUED.value, started_at),
         ).fetchone()
         if row is None:
             return None
         cur = conn.execute(
-            "UPDATE submissions SET status = ?, started_at = ?"
+            "UPDATE submissions SET status = ?, started_at = ?,"
+            " attempts = attempts + 1"
             " WHERE id = ? AND status = ?",
             (
                 SubmissionStatus.RUNNING.value,
@@ -284,6 +293,57 @@ def mark_failed(path: Path, submission_id: str, *, error: str) -> None:
                 SubmissionStatus.FAILED.value,
             ),
         )
+
+
+def requeue_for_retry(
+    path: Path,
+    submission_id: str,
+    *,
+    error: str,
+    from_status: SubmissionStatus = SubmissionStatus.RUNNING,
+    delay_seconds: float = 0.0,
+) -> Submission | None:
+    """Put a submission back on the queue after a transient failure.
+
+    Used when the pipeline died for a reason the customer can do nothing about
+    (rate-site outage, model API blip, DB hiccup). The row keeps its attempts
+    count so the worker can stop retrying eventually. Returns the updated row,
+    or None if it had already moved on (another actor decided it first).
+
+    `from_status` is the state the row must still be in. It defaults to
+    RUNNING — the in-flight failure case. The stale-job reaper passes FAILED,
+    because it has already marked its orphans failed before deciding which of
+    them are worth another attempt.
+
+    `delay_seconds` holds the row back from the queue for that long. Retries
+    exist for faults that take seconds-to-minutes to clear, so re-claiming
+    immediately (which is what happens without this — the requeued row is the
+    oldest QUEUED one) spends every attempt before the fault could resolve.
+    """
+    next_attempt_at = (
+        (datetime.now(UTC) + timedelta(seconds=delay_seconds)).isoformat()
+        if delay_seconds > 0
+        else None
+    )
+    with _connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE submissions SET status = ?, started_at = NULL, error = ?,"
+            " next_attempt_at = ?"
+            " WHERE id = ? AND status = ?",
+            (
+                SubmissionStatus.QUEUED.value,
+                error[:4000],
+                next_attempt_at,
+                submission_id,
+                from_status.value,
+            ),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM submissions WHERE id = ?", (submission_id,)
+        ).fetchone()
+    return _row_to_submission(row) if row is not None else None
 
 
 def reap_stale_running(
@@ -542,4 +602,6 @@ def _row_to_submission(row: sqlite3.Row) -> Submission:
         decline_reason=row["decline_reason"],
         telegram_message_id=row["telegram_message_id"],
         telegram_chat_id=row["telegram_chat_id"],
+        attempts=row["attempts"] or 0,
+        next_attempt_at=_dt(row["next_attempt_at"]),
     )

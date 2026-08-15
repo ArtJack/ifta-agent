@@ -1,0 +1,21 @@
+# Nightly data snapshot -> local dir -> Cloudflare R2, pruning both to
+# $IFTA_BACKUP_KEEP (default 3). Triggered by ifta-backup.timer.
+#
+#   systemctl start ifta-backup      # run one now
+#   journalctl -u ifta-backup -n 50  # see the last run
+#
+# Runs `ifta backup` inside a one-shot container so it shares the app's
+# environment and mounts: it captures the PII bind mounts *and* pg_dumps the
+# job database, which lives in Postgres and not under data/.
+
+[Unit]
+Description=IFTA nightly data snapshot to Cloudflare R2
+Requires=ifta.service
+After=ifta.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__PROJECT_ROOT__/deploy/oracle
+EnvironmentFile=__PROJECT_ROOT__/deploy/oracle/.env
+ExecStart=/usr/bin/docker compose --profile backup run --rm backup
+TimeoutStartSec=1800

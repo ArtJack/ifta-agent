@@ -1,7 +1,7 @@
 # IFTA Agent — quarterly fuel-tax filing pipeline with an LLM review agent
 
 **Status:** in production, filing every quarter for a real carrier (DM Express) ·
-**429 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
+**555 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
 
 > Carriers drop in their messy mileage + fuel-card exports; minutes later they get a
 > filing-ready IFTA packet that an LLM agent has reviewed against the regulations and their
@@ -12,7 +12,7 @@
 ### The core idea: math is deterministic, the LLM only reviews
 A deterministic pipeline (`ingest → calc → validate → report`) computes everything that lands on
 the tax form — fleet MPG, taxable gallons, per-jurisdiction tax + surcharge. An LLM agent
-(Anthropic SDK, **18 grounded tools**) then *reviews* that computed return against the rule base,
+(Anthropic SDK, **17 grounded tools**) then *reviews* that computed return against the rule base,
 live rates, and real filing history — it never computes a number, so a carrier can trust it for a
 government filing. Regression-tested to the penny; a layered eval harness gates the pipeline
 (see the [case study](ifta-portfolio/CASE-STUDY.md)).
@@ -79,7 +79,7 @@ Each agent command takes `--model` and `--effort`:
 |---|---|---|
 | `--model` | `claude-sonnet-4-6` (default), `claude-opus-4-7`, `claude-haiku-4-5` | Sonnet = normal reviews. Opus = highest-risk reviews. Haiku = cheap/fast Q&A. |
 | `--effort` | `low`, `medium` (default), `high`, `xhigh`, `max` | Thinking depth — higher = more thorough/expensive. |
-| `--max-tokens` | int | Output ceiling per call. Defaults: review 4096, ask 2048, chat 4096. |
+| `--max-tokens` | int | Output ceiling per call. Defaults: review 12288, ask 2048, chat 4096. |
 
 ## Telegram Intake Bot
 
@@ -178,13 +178,14 @@ If current-quarter rates are unavailable, the bot marks the packet as
 
 ## Project layout
 
-**44 Python modules · 16k LOC · 429 tests across 38 files.** Layered by responsibility:
+**47 Python modules · 18k LOC · 555 tests across 46 files.** Layered by responsibility:
 
 ```
 src/ifta/
 ├─ cli.py                  # Click CLI: run | review | ask | chat | telegram-bot | rates
 ├─ models.py               # canonical data model + jurisdiction sets
 │  ── deterministic pipeline (the math) ──
+├─ quarter.py              # compute_quarter() — the ONE core every customer path calls
 ├─ ingest.py               # CSV / Excel / PDF parsers
 ├─ rates.py                # IFTA rate-matrix fetcher + cache (iftach.org)
 ├─ calc.py                 # fleet-MPG, taxable gallons, surcharge math
@@ -192,7 +193,7 @@ src/ifta/
 ├─ report.py               # Excel + portal-CSV writers
 ├─ agent/                  # ── LLM review layer (judgment) ──
 │  ├─ runner.py            # SDK invocation, model/effort kwargs, conversation loop
-│  ├─ tools.py             # 18 grounded tools the agent can call
+│  ├─ tools.py             # 17 grounded tools the agent can call
 │  ├─ prompts.py           # system + review-prompt templates
 │  └─ context.py · metrics.py · tracing.py
 ├─ intake/                 # extract · receipts (vision) · reconcile · report
@@ -202,25 +203,27 @@ src/ifta/
    ├─ telegram_approval.py # operator approval gate
    ├─ turnstile.py         # CAPTCHA   email.py  models.py  intake_brief.py
 
-docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · BENCHMARK · JUDGE · TRACING
+docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · ORACLE (deploy) · AZURE · BENCHMARK · JUDGE · TRACING
+deploy/      oracle/ (compose + systemd, current prod) · launchd/ (Mac mini) · azure/ (Bicep)
 evals/       benchmark history, cases, receipt eval reports (PII receipts git-ignored)
 data/        regulations KB · cached rate matrices · per-client history (git-ignored)
 ifta-portfolio/CASE-STUDY.md
-tests/       38 files, 429 tests — incl. penny-accurate regression vs. real filings
+tests/       46 files, 555 tests — penny-accurate golden quarter runs on any checkout;
+             the real-carrier regressions need the private (git-ignored) inputs and skip without them
 ```
 
 ## The AI agent (Phase 2)
 
-The agent has **16 tools** to ground its answers in real data — your
+The agent has **17 tools** to ground its answers in real data — your
 returns, the validator, the regulations KB, rate matrix, and 21 quarters
 of historical filings between two carriers.
 
 | Tool category | Tools |
 |---|---|
-| Pipeline | `list_quarters`, `query_return`, `query_findings`, `compare_to_filing` |
+| Pipeline | `list_quarters`, `get_client_context`, `inspect_raw_inputs`, `query_return`, `query_findings`, `get_review_packet`, `query_per_truck`, `compare_to_filing` |
 | Rules | `lookup_rate`, `get_regulations` |
-| DM EXPRESS INC ("David", active) | `get_david_profile`, `query_david_history`, `list_david_files` |
-| MENSHIKOV LLC (retired, reference) | `get_my_truck_profile`, `query_my_truck_history`, `compare_quarter_to_history`, `list_past_filings`, `read_past_filing` |
+| Client registry | `list_clients`, `get_client_profile`, `query_client_history`, `list_client_files` |
+| Historical filings | `compare_quarter_to_history`, `list_past_filings`, `read_past_filing` |
 
 System prompt and review-prompt template live in
 `src/ifta/agent/prompts.py` — easy to edit without touching code.

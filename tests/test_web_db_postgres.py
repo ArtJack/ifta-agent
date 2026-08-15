@@ -108,3 +108,49 @@ def test_postgres_mark_failed_then_done_recovers(pg) -> None:
     pg.mark_done(UNUSED, "pg-x")
     done = pg.get_submission(UNUSED, "pg-x")
     assert done is not None and done.status is SubmissionStatus.DONE
+
+
+def test_backends_expose_the_same_function_surface() -> None:
+    """Both backends must stay signature-compatible.
+
+    db.py is a PEP-562 facade that forwards any attribute to whichever backend
+    the environment selected, so a function added to only one of them fails at
+    runtime on the other deployment — and only in production, since the local
+    suite runs on SQLite. This catches that at test time.
+    """
+    # Read the sources rather than importing: db_postgres imports psycopg at
+    # module level, which isn't installed without the [azure] extra. Parsing
+    # keeps this guard running in every environment — a skipped guard would
+    # have let exactly the drift it checks for reach production.
+    import ast
+
+    import ifta.web.db_sqlite as _sqlite_mod
+
+    pkg_dir = Path(_sqlite_mod.__file__).parent
+
+    def surface(filename: str) -> dict[str, list[str]]:
+        tree = ast.parse((pkg_dir / filename).read_text(encoding="utf-8"))
+        out: dict[str, list[str]] = {}
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+                continue
+            args = node.args
+            params = [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+            out[node.name] = params
+        return out
+
+    sqlite_surface = surface("db_sqlite.py")
+    pg_surface = surface("db_postgres.py")
+    assert sqlite_surface, "failed to parse db_sqlite.py"
+
+    missing_in_pg = sorted(set(sqlite_surface) - set(pg_surface))
+    missing_in_sqlite = sorted(set(pg_surface) - set(sqlite_surface))
+    assert not missing_in_pg, f"db_postgres is missing: {missing_in_pg}"
+    assert not missing_in_sqlite, f"db_sqlite is missing: {missing_in_sqlite}"
+
+    mismatched = {
+        name: (sqlite_surface[name], pg_surface[name])
+        for name in sqlite_surface
+        if sqlite_surface[name] != pg_surface[name]
+    }
+    assert not mismatched, f"parameter lists differ between backends: {mismatched}"

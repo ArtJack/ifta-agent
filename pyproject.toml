@@ -36,12 +36,24 @@ dev = [
     "mypy>=1.10",
     "pytest>=8.0",
     "ruff>=0.5",
+    # So the Postgres backend's tests are runnable in dev, not just importable.
+    # Without it `pytest.importorskip("psycopg")` silently skipped them and the
+    # production backend went unexercised. Point IFTA_TEST_PG_URL at a scratch
+    # database to run the round-trip set (see tests/test_web_db_postgres.py).
+    "psycopg[binary]>=3.2",
 ]
 # Azure production runtime. psycopg[binary] bundles libpq (no system libpq
 # needed), enabling the Postgres job-state backend selected by IFTA_WEB_DB_URL.
 # Purely additive: unset the URL and the app still uses SQLite (Mac mini / local).
 azure = [
     "psycopg[binary]>=3.2",
+]
+# Oracle Linux production runtime: the same Postgres backend, plus boto3 for
+# replicating nightly snapshots to Cloudflare R2 (S3-compatible). Kept separate
+# from `azure` so neither deployment carries the other's dependencies.
+oracle = [
+    "psycopg[binary]>=3.2",
+    "boto3>=1.34",
 ]
 
 [project.scripts]
