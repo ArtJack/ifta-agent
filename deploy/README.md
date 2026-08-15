@@ -1,5 +1,13 @@
 # IFTA web intake — Mac mini deploy
 
+> **Not the current production target.** IFTA runs on the Oracle Linux box —
+> see [`docs/ORACLE.md`](../docs/ORACLE.md). This document covers the original
+> Mac mini / launchd deployment, kept as the documented rollback path. The
+> Azure Container Apps deployment is in [`docs/AZURE.md`](../docs/AZURE.md).
+>
+> Steps 1–3 and 6 below (Cloudflare Tunnel, Resend DKIM, Turnstile, Vercel env)
+> are shared with the Oracle deployment; steps 4–5 are Mac-mini specific.
+
 This is the runbook for going live with the self-service IFTA upload flow.
 Six steps; the order matters because later steps depend on credentials
 created in earlier ones.

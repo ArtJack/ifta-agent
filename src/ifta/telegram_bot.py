@@ -58,7 +58,7 @@ from ifta.agent import (
 from ifta.agent import (
     review as agent_review,
 )
-from ifta.calc import compute_per_truck_lines, compute_return
+from ifta.calc import compute_per_truck_lines
 from ifta.client import (
     ClientRecord,
     load_client_context,
@@ -67,17 +67,16 @@ from ifta.client import (
     quarter_key,
     resolve_output_dir,
 )
-from ifta.ingest import ingest_folder
 from ifta.notify import AdminNotifier, format_event, load_admin_notifier_config
 from ifta.preflight import PreflightReport, format_preflight, preflight_inputs
-from ifta.rates import fetch_rates
+from ifta.quarter import QuarterBlockedError, compute_quarter
 from ifta.report import (
     write_cleaned_csvs,
     write_owner_review_xlsx,
     write_per_truck_filings,
     write_portal_csv,
 )
-from ifta.validator import Finding, format_findings, validate
+from ifta.validator import Finding, format_findings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SUPPORTED_UPLOAD_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".pdf"}
@@ -247,9 +246,16 @@ def load_telegram_access(project_root: Path) -> dict[str, set[int]]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        # Fail closed (nobody is authorized) but say so loudly — a silent {}
+        # here looks identical to "no customers approved yet".
+        print(
+            f"  ‼ {path} is corrupt ({e}). ALL Telegram approvals are being "
+            "denied until it is repaired or restored."
+        )
         return {}
     if not isinstance(payload, dict):
+        print(f"  ‼ {path} is not a JSON object. ALL Telegram approvals denied.")
         return {}
     clients_payload = payload.get("clients", payload)
     if not isinstance(clients_payload, dict):
@@ -271,22 +277,48 @@ def load_telegram_access(project_root: Path) -> dict[str, set[int]]:
     return access
 
 
+class AccessFileCorruptError(RuntimeError):
+    """The Telegram access file exists but isn't readable JSON."""
+
+
 def _read_raw_access_file(project_root: Path) -> dict[str, Any]:
-    """Read the full access file as a dict so we can preserve unknown sections."""
+    """Read the full access file as a dict so we can preserve unknown sections.
+
+    Raises AccessFileCorruptError when the file exists but doesn't parse.
+    Callers here are read-modify-write; treating a corrupt file as ``{}`` would
+    make the very next write (any incoming DM triggers `upsert_known_user`)
+    overwrite it with only that one section, permanently erasing every client
+    approval, preauth and pending record.
+    """
     path = telegram_access_path(project_root)
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError as e:
+        raise AccessFileCorruptError(
+            f"{path} is not valid JSON ({e}). Refusing to overwrite it — "
+            "restore it from a backup or repair it by hand."
+        ) from e
+    if not isinstance(payload, dict):
+        raise AccessFileCorruptError(
+            f"{path} does not contain a JSON object. Refusing to overwrite it."
+        )
+    return payload
 
 
 def _write_raw_access_file(project_root: Path, payload: dict[str, Any]) -> Path:
+    """Persist the access file atomically (temp file + rename).
+
+    A plain write truncates first, so a crash or container kill mid-write (more
+    likely on the Azure Files mount) would leave torn JSON — and every customer
+    instantly unauthorized.
+    """
     path = telegram_access_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
@@ -952,6 +984,62 @@ def _metrics_payload(metrics: AgentMetrics | None) -> dict[str, object] | None:
     return asdict(metrics) if metrics else None
 
 
+def _preflight_and_identity_blocking(
+    submission: Submission, config: BotConfig
+) -> tuple[PreflightReport, ClientIdentityReport]:
+    report = preflight_inputs(submission.inbox)
+    identity = check_client_identity(
+        project_root=config.project_root,
+        submission=submission,
+        report=report,
+    )
+    return report, identity
+
+
+async def _offload(func: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run a blocking call in a thread, swallowing failures.
+
+    The approval-callback path is a chain of best-effort side effects (edit the
+    Telegram card, email the customer) that were each wrapped in
+    `contextlib.suppress` and called inline. Synchronous HTTP on the event loop
+    stalls every other customer's updates, so they run off-loop — with the same
+    "never break the handler" semantics.
+    """
+    try:
+        return await asyncio.to_thread(func, *args, **kwargs)
+    except Exception:
+        return None
+
+
+async def _preflight_and_identity(
+    submission: Submission, config: BotConfig
+) -> tuple[PreflightReport, ClientIdentityReport]:
+    """Preflight + identity check without freezing the event loop.
+
+    Both parse every file in the inbox (Excel/PDF), which for a real quarter is
+    seconds of CPU. Run inline from an async handler that stalls every other
+    customer's messages for the duration.
+    """
+    return await asyncio.to_thread(_preflight_and_identity_blocking, submission, config)
+
+
+def _client_lock(context: ContextTypes.DEFAULT_TYPE, client_id: str) -> asyncio.Lock:
+    """One lock per client so two runs can't share an inbox/output directory.
+
+    Sessions are per-user but the inbox is per-client, so a carrier with two
+    approved Telegram users (owner + dispatcher) could otherwise have both
+    processing the same quarter at once, writing over each other's outputs.
+    """
+    locks: dict[str, asyncio.Lock] = context.application.bot_data.setdefault(
+        "client_locks", {}
+    )
+    lock = locks.get(client_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[client_id] = lock
+    return lock
+
+
 def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
     """Run deterministic compute + review and write all customer deliverables."""
     report = preflight_inputs(submission.inbox)
@@ -974,10 +1062,20 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
         client=submission.client_id,
         inbox=submission.inbox,
     )
-    data = ingest_folder(submission.inbox)
-    rates_table = fetch_rates(submission.quarter)
-    ret = compute_return(data, rates_table)
-    findings = validate(data, ret)
+    # Shared deterministic core (dedup + gate live there, not here). The
+    # preflight report is passed in because the identity check above already
+    # needed it — recomputing would re-parse every file in the inbox.
+    try:
+        computed = compute_quarter(
+            submission.inbox, submission.quarter, preflight=report
+        )
+    except QuarterBlockedError as e:
+        raise DeliveryBlockedError(str(e)) from e
+
+    data = computed.data
+    rates_table = computed.rates
+    ret = computed.ret
+    findings = computed.findings
 
     out_dir = resolve_output_dir(config.project_root, submission.quarter, submission.client_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1047,11 +1145,11 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
     if agent_error:
         warnings.append(f"Agent review failed: {agent_error}")
 
-    ready_to_file = (
-        not ret.rate_fallback_used
-        and not agent_error
-        and not any(f.severity == "error" for f in findings)
-    )
+    # Readiness comes from the shared deterministic gate, not a local boolean
+    # (this used to re-derive rate-fallback + error-findings inline and could
+    # drift from every other path). A failed agent review still blocks here:
+    # the packet went out without the review it promises.
+    ready_to_file = not computed.blocked and not agent_error
     return DeliveryResult(
         client_name=client_context.client_name,
         quarter=submission.quarter,
@@ -2117,7 +2215,13 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     is_self_share = target_uid is not None and target_uid == actor.id
 
     # Customer is sharing their OWN contact → verify against phone preauth.
-    if is_self_share or (not is_admin and target_uid is None):
+    # ONLY a contact Telegram itself resolved to the sender's account counts.
+    # An unresolved contact (user_id=None) carries an arbitrary phone number
+    # from the sender's address book: accepting it would let anyone claim a
+    # pending preauth by attaching a contact card bearing the carrier's phone
+    # number (which is public in FMCSA SAFER), consuming the real customer's
+    # preauth and gaining access to that carrier's filings.
+    if is_self_share:
         await _handle_customer_phone_verify(
             update,
             context,
@@ -2127,10 +2231,12 @@ async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if not is_admin:
-        # Non-admin sharing someone else's contact — odd, just ignore.
+        # Either someone else's contact, or one Telegram couldn't tie to an
+        # account — neither proves the sender owns the number.
         await msg.reply_text(
-            "That's not your own contact. To verify yourself, use the "
-            "'Share my contact' button after /start."
+            "I can only verify a contact Telegram confirms is yours.\n"
+            "Tap the 'Share my contact' button after /start, or send /id and "
+            "pass your Telegram id to Eugene."
         )
         return
 
@@ -2544,12 +2650,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=_keyboard_from_context(update, config),
         )
         return
-    report = preflight_inputs(submission.inbox)
-    identity = check_client_identity(
-        project_root=config.project_root,
-        submission=submission,
-        report=report,
-    )
+    report, identity = await _preflight_and_identity(submission, config)
     await update.message.reply_text(
         f"{submission.client_name} {submission.quarter}\n\n{summarize_preflight(report, identity)}",
         reply_markup=_approved_keyboard(submission.quarter),
@@ -2602,12 +2703,7 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     submission.uploaded_files.append(destination.name)
     _store_submission(context, submission)
 
-    report = preflight_inputs(submission.inbox)
-    identity = check_client_identity(
-        project_root=config.project_root,
-        submission=submission,
-        report=report,
-    )
+    report, identity = await _preflight_and_identity(submission, config)
     if not report.has_errors and not identity.has_errors and report.mile_rows > 0 and report.fuel_rows > 0:
         next_line = "\nReady to process. Send /process."
     elif identity.has_errors:
@@ -2643,15 +2739,24 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     customer_label = _customer_label(update, submission)
 
+    lock = _client_lock(context, submission.client_id)
+    if lock.locked():
+        await update.message.reply_text(
+            f"A filing for {submission.client_name} is already being processed. "
+            "I'll send the packet as soon as it finishes — no need to send /process again."
+        )
+        return
+
     await update.message.reply_text(
         f"Processing {submission.client_name} {submission.quarter}. This can take a few minutes."
     )
     await update.message.chat.send_action(ChatAction.TYPING)
     try:
-        result = await asyncio.to_thread(run_delivery, submission, config)
+        async with lock:
+            result = await asyncio.to_thread(run_delivery, submission, config)
     except DeliveryBlockedError as e:
         await update.message.reply_text(f"Processing blocked this submission:\n\n{e}")
-        _safe_admin_notify(
+        await _safe_admin_notify(
             notifier,
             headline="❌ IFTA submission blocked",
             source="telegram bot",
@@ -2662,7 +2767,7 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     except Exception as e:
         await update.message.reply_text(f"Processing failed: {type(e).__name__}: {e}")
-        _safe_admin_notify(
+        await _safe_admin_notify(
             notifier,
             headline="❌ IFTA submission failed",
             source="telegram bot",
@@ -2671,16 +2776,6 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             extras={"Client": submission.client_name, "Error": f"{type(e).__name__}: {e}"},
         )
         return
-
-    _safe_admin_notify(
-        notifier,
-        headline="✅ IFTA packet delivered",
-        source="telegram bot",
-        customer=customer_label,
-        quarter=submission.quarter,
-        extras={"Client": submission.client_name},
-        review_note_path=result.review_note,
-    )
 
     status = "READY FOR HUMAN REVIEW" if result.ready_to_file else "REVIEW REQUIRED"
     warning_text = "\n\nWarnings:\n" + "\n".join(f"- {w}" for w in result.warnings) if result.warnings else ""
@@ -2696,12 +2791,58 @@ async def process_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup=_approved_keyboard(result.quarter),
     )
 
-    for path in result.customer_files:
-        if not path.exists():
-            continue
-        await update.message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
-        with path.open("rb") as fh:
-            await update.message.reply_document(document=fh, filename=path.name)
+    # Send every packet file, surviving individual failures. A single
+    # TelegramError (network blip, or a file over the bot upload cap) used to
+    # abort the handler mid-loop: the customer silently received a PARTIAL
+    # packet — missing per-truck files or the portal CSV — while the admin had
+    # already been told it was delivered.
+    expected = [p for p in result.customer_files if p.exists()]
+    missing = [p.name for p in result.customer_files if not p.exists()]
+    failed: list[str] = []
+    for path in expected:
+        try:
+            await update.message.chat.send_action(ChatAction.UPLOAD_DOCUMENT)
+            with path.open("rb") as fh:
+                await update.message.reply_document(document=fh, filename=path.name)
+        except (TelegramError, OSError) as e:
+            failed.append(f"{path.name} ({type(e).__name__})")
+
+    sent = len(expected) - len(failed)
+    if failed or missing:
+        problems = failed + [f"{name} (not generated)" for name in missing]
+        with contextlib.suppress(TelegramError):
+            await update.message.reply_text(
+                f"⚠️ Sent {sent} of {len(expected) + len(missing)} packet files.\n"
+                "These did not go through:\n"
+                + "\n".join(f"- {p}" for p in problems)
+                + "\n\nRun /process again to resend, or contact Eugene."
+            )
+
+    # Notify the admin only once delivery has actually been attempted, and say
+    # plainly when it was incomplete.
+    if failed or missing:
+        await _safe_admin_notify(
+            notifier,
+            headline=f"⚠️ IFTA packet INCOMPLETE — {sent}/{len(expected) + len(missing)} files sent",
+            source="telegram bot",
+            customer=customer_label,
+            quarter=submission.quarter,
+            extras={
+                "Client": submission.client_name,
+                "Undelivered": ", ".join(failed + missing),
+            },
+            review_note_path=result.review_note,
+        )
+    else:
+        await _safe_admin_notify(
+            notifier,
+            headline="✅ IFTA packet delivered",
+            source="telegram bot",
+            customer=customer_label,
+            quarter=submission.quarter,
+            extras={"Client": submission.client_name},
+            review_note_path=result.review_note,
+        )
 
 
 def _customer_label(update: Update, submission: Submission) -> str:
@@ -2719,7 +2860,35 @@ def _customer_label(update: Update, submission: Submission) -> str:
     return " ".join(parts)
 
 
-def _safe_admin_notify(
+async def _safe_admin_notify(
+    notifier: AdminNotifier,
+    *,
+    headline: str,
+    source: str,
+    customer: str,
+    quarter: str | None = None,
+    extras: dict[str, str] | None = None,
+    review_note_path: Path | None = None,
+) -> None:
+    """Notify admins without blocking the event loop or crashing the handler.
+
+    `notifier.send` is synchronous HTTP (one 5s-timeout request per admin
+    chat). Called inline from an async handler it stalls every other customer's
+    updates for the duration, so it runs in a thread.
+    """
+    await asyncio.to_thread(
+        _admin_notify_blocking,
+        notifier,
+        headline=headline,
+        source=source,
+        customer=customer,
+        quarter=quarter,
+        extras=extras,
+        review_note_path=review_note_path,
+    )
+
+
+def _admin_notify_blocking(
     notifier: AdminNotifier,
     *,
     headline: str,
@@ -2778,7 +2947,7 @@ async def web_approval_callback(
     # Lazy imports to avoid circular deps and keep the import cost out of
     # unrelated code paths.
     from ifta.web import db as web_db
-    from ifta.web.app import get_db_path
+    from ifta.web.app import get_db_path, get_submissions_dir
     from ifta.web.email import EmailClient, load_email_config_from_env
     from ifta.web.telegram_approval import TelegramApprovalClient, load_approval_config
 
@@ -2815,12 +2984,12 @@ async def web_approval_callback(
 
         # Edit the Telegram card in-place.
         if chat_id is not None and message_id is not None:
-            with contextlib.suppress(Exception):
-                approval_client.edit_card_approved(chat_id, message_id, sub, decided_by)
+            await _offload(
+                approval_client.edit_card_approved, chat_id, message_id, sub, decided_by
+            )
 
         # Send acknowledgement that processing will start.
-        with contextlib.suppress(Exception):
-            email_client.send_acknowledgement(sub)
+        await _offload(email_client.send_acknowledgement, sub)
 
         await query.answer("Approved -- queued for processing.")
         return
@@ -2843,20 +3012,29 @@ async def web_approval_callback(
             return
 
         if chat_id is not None and message_id is not None:
-            with contextlib.suppress(Exception):
-                approval_client.edit_card_more_files_requested(
-                    chat_id, message_id, sub, decided_by,
-                )
+            await _offload(
+                approval_client.edit_card_more_files_requested,
+                chat_id,
+                message_id,
+                sub,
+                decided_by,
+            )
 
         # Load the intake brief from disk to drive the friendly email body.
         # Falls back to a generic email if the brief is missing.
         intake_brief_text = ""
         if sub.intake_brief_path:
-            brief_path = config.project_root / sub.intake_brief_path
+            # intake_brief_path is stored relative to the SUBMISSIONS dir
+            # (intake_brief.py does relative_to(submissions_dir)), not the
+            # project root — resolving it against the root missed the
+            # data/web_submissions/ segment in every configuration, so the
+            # read always failed and the customer silently got the generic
+            # "we'll follow up with specifics" filler instead of the concrete
+            # preflight findings the operator meant to send.
+            brief_path = get_submissions_dir() / sub.intake_brief_path
             with contextlib.suppress(Exception):
                 intake_brief_text = brief_path.read_text(encoding="utf-8")
-        with contextlib.suppress(Exception):
-            email_client.send_more_files_request(sub, intake_brief_text)
+        await _offload(email_client.send_more_files_request, sub, intake_brief_text)
 
         await query.answer("Customer asked for more files.")
         return
@@ -2880,21 +3058,35 @@ async def web_approval_callback(
         return
 
     if chat_id is not None and message_id is not None:
-        with contextlib.suppress(Exception):
-            approval_client.edit_card_rejected(
-                chat_id, message_id, sub, decided_by, reason,
-            )
+        await _offload(
+            approval_client.edit_card_rejected,
+            chat_id,
+            message_id,
+            sub,
+            decided_by,
+            reason,
+        )
 
-    with contextlib.suppress(Exception):
-        email_client.send_rejection(sub, reason)
+    await _offload(email_client.send_rejection, sub, reason)
 
     await query.answer("Declined -- customer notified.")
 
 
 def build_application(config: BotConfig) -> Application:
-    app = ApplicationBuilder().token(config.token).build()
+    # concurrent_updates: without it PTB awaits each update to completion, so a
+    # single /process (pipeline + LLM review — minutes) froze the bot for every
+    # other customer, and a user could repeat /process to stall it indefinitely.
+    # Per-client locking below keeps two runs off the same inbox; the handlers
+    # push their blocking work to threads so the event loop stays responsive.
+    app = (
+        ApplicationBuilder()
+        .token(config.token)
+        .concurrent_updates(True)
+        .build()
+    )
     app.bot_data["config"] = config
     app.bot_data["admin_notifier"] = AdminNotifier(load_admin_notifier_config())
+    app.bot_data["client_locks"] = {}
     # group=-1 runs before all default-group handlers — used to track first-time
     # DMs and auto-approve preauthorized usernames.
     app.add_handler(

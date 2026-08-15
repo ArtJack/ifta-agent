@@ -1,0 +1,197 @@
+# IFTA on the Oracle Linux box — the whole production stack.
+#
+#   postgres      job state (the SQLite backend is not used here)
+#   web           FastAPI intake, reachable only through the Cloudflare tunnel
+#   worker        drains the submission queue
+#   telegram-bot  operator/admin interface (profile: telegram)
+#   cloudflared   outbound tunnel for ifta-api.artjeck.com — no inbound ports
+#   backup        one-shot, run by ifta-backup.timer (profile: backup)
+#
+# The four app services share one image built from the repo root.
+#
+# Two storage rules worth knowing before you edit this file:
+#
+#  * PII directories are **bind mounts** under $IFTA_STATE_DIR so they can be
+#    inspected, migrated, and snapshotted from the host. They carry `:Z` so
+#    SELinux relabels them for the container — Oracle Linux enforces by
+#    default, and without the label every write fails with EACCES.
+#  * `rates` is a **named volume**, not a bind mount, precisely because Docker
+#    seeds a new named volume from the image's contents while a bind mount
+#    hides them. The image ships a committed rate cache; mounting over it would
+#    force a refetch from iftach.org on first run.
+#
+# Usage: see docs/ORACLE.md. Don't `docker compose up` by hand in production —
+# the ifta.service systemd unit owns the lifecycle.
+
+name: ifta
+
+x-app-env: &app-env
+  # Postgres, not SQLite: this variable is what flips ifta.web.db's backend.
+  IFTA_WEB_DB_URL: postgresql://ifta:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ifta
+  IFTA_WEB_SUBMISSIONS_DIR: /app/data/web_submissions
+  # Must live under a mounted directory — a path at /app/data/ root would sit
+  # in the image layer and every approval would be lost on redeploy.
+  IFTA_TELEGRAM_ACCESS_FILE: /app/data/state/telegram_access.json
+  IFTA_WEB_PUBLIC_BASE_URL: ${IFTA_WEB_PUBLIC_BASE_URL:?}
+  IFTA_WEB_CORS_ORIGINS: ${IFTA_WEB_CORS_ORIGINS:-}
+  IFTA_WEB_ADMIN_BCC: ${IFTA_WEB_ADMIN_BCC:-}
+  IFTA_WEB_SUBMIT_RATE_LIMIT: ${IFTA_WEB_SUBMIT_RATE_LIMIT:-3/hour}
+  IFTA_WEB_MAX_FILE_MB: ${IFTA_WEB_MAX_FILE_MB:-10}
+  IFTA_WEB_BACKEND_KEY: ${IFTA_WEB_BACKEND_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?}
+  RESEND_API_KEY: ${RESEND_API_KEY:?}
+  RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:?}
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+  # Defaults ON so an .env written before this variable existed still fails
+  # closed: a missing CAPTCHA secret rejects anonymous submissions rather than
+  # quietly disabling bot protection on a public endpoint.
+  IFTA_WEB_REQUIRE_TURNSTILE: ${IFTA_WEB_REQUIRE_TURNSTILE:-1}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_ADMIN_USER_IDS: ${TELEGRAM_ADMIN_USER_IDS:-}
+  TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID:-}
+  # cloudflared terminates TLS and forwards over the compose network, so the
+  # peer address uvicorn sees is never loopback. Without this, X-Forwarded-For
+  # is ignored and every customer shares one rate-limit bucket.
+  FORWARDED_ALLOW_IPS: "*"
+  TZ: ${TZ:-UTC}
+  # --- carried over from the Mac mini launchd deployment -------------------
+  # These are read by the code but were absent from this file, so a migration
+  # without them would silently change behaviour (different Claude model for
+  # the bot, no one-click link in confirmation emails). The numeric ones carry
+  # defaults because the code does int()/float() on them -- an empty string
+  # raises ValueError, whereas an unset var falls back to the code default.
+  IFTA_PUBLIC_SITE_URL: ${IFTA_PUBLIC_SITE_URL:-}
+  TELEGRAM_AGENT_MODEL: ${TELEGRAM_AGENT_MODEL:-claude-sonnet-4-6}
+  TELEGRAM_AGENT_EFFORT: ${TELEGRAM_AGENT_EFFORT:-medium}
+  TELEGRAM_AGENT_MAX_TOKENS: ${TELEGRAM_AGENT_MAX_TOKENS:-2048}
+  TELEGRAM_MAX_FILE_MB: ${TELEGRAM_MAX_FILE_MB:-20}
+  TELEGRAM_SKIP_AGENT: ${TELEGRAM_SKIP_AGENT:-0}
+
+
+x-app-build: &app-build
+  context: ../..
+  dockerfile: Dockerfile
+  args:
+    EXTRAS: oracle
+    PG_MAJOR: "16"
+
+x-app-volumes: &app-volumes
+  - ${IFTA_STATE_DIR:-/var/lib/ifta}/clients:/app/data/clients:Z
+  - ${IFTA_STATE_DIR:-/var/lib/ifta}/web_submissions:/app/data/web_submissions:Z
+  - ${IFTA_STATE_DIR:-/var/lib/ifta}/traces:/app/data/traces:Z
+  - ${IFTA_STATE_DIR:-/var/lib/ifta}/state:/app/data/state:Z
+  - ifta-rates:/app/data/rates
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ifta
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ifta
+      # Deterministic collation so ORDER BY matches across hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - ${IFTA_STATE_DIR:-/var/lib/ifta}/postgres:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ifta -d ifta"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Never published to the host — only the compose network reaches it.
+    expose:
+      - "5432"
+
+  web:
+    build: *app-build
+    image: ifta:latest
+    restart: unless-stopped
+    command: ["ifta", "web", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    volumes: *app-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    expose:
+      - "8000"
+
+  worker:
+    build: *app-build
+    image: ifta:latest
+    restart: unless-stopped
+    command: ["ifta", "worker"]
+    environment: *app-env
+    volumes: *app-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  telegram-bot:
+    build: *app-build
+    image: ifta:latest
+    restart: unless-stopped
+    command: ["ifta", "telegram-bot"]
+    environment: *app-env
+    volumes: *app-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Enabled only once a real token is in .env — a placeholder crash-loops.
+    profiles: ["telegram"]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # ADAPTED from the runbook: instead of a remotely-managed dashboard tunnel,
+    # this reuses the existing locally-managed `ifta-api` tunnel relocated from
+    # the Mac mini. DNS is therefore never touched -- the CNAME already points
+    # at this tunnel UUID. Ingress lives in /etc/cloudflared/config.yml.
+    #
+    # Gated behind the `tunnel` profile so the stack can be built, migrated and
+    # verified without taking production traffic. Enable at cutover by setting
+    # COMPOSE_PROFILES=tunnel in .env, which the systemd unit passes through.
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - /etc/cloudflared:/etc/cloudflared:ro
+    profiles: ["tunnel"]
+    depends_on:
+      - web
+
+  backup:
+    build: *app-build
+    image: ifta:latest
+    # One-shot: `docker compose run --rm backup`, driven by ifta-backup.timer.
+    restart: "no"
+    command: ["ifta", "backup"]
+    environment:
+      <<: *app-env
+      IFTA_BACKUP_DIR: /backups
+      IFTA_BACKUP_KEEP: ${IFTA_BACKUP_KEEP:-3}
+      IFTA_BACKUP_R2_BUCKET: ${IFTA_BACKUP_R2_BUCKET:-}
+      IFTA_BACKUP_R2_ENDPOINT: ${IFTA_BACKUP_R2_ENDPOINT:-}
+      IFTA_BACKUP_R2_ACCESS_KEY_ID: ${IFTA_BACKUP_R2_ACCESS_KEY_ID:-}
+      IFTA_BACKUP_R2_SECRET_ACCESS_KEY: ${IFTA_BACKUP_R2_SECRET_ACCESS_KEY:-}
+      IFTA_BACKUP_R2_PREFIX: ${IFTA_BACKUP_R2_PREFIX:-snapshots}
+    volumes:
+      - ${IFTA_STATE_DIR:-/var/lib/ifta}/clients:/app/data/clients:Z
+      - ${IFTA_STATE_DIR:-/var/lib/ifta}/web_submissions:/app/data/web_submissions:Z
+      - ${IFTA_STATE_DIR:-/var/lib/ifta}/traces:/app/data/traces:Z
+      - ${IFTA_STATE_DIR:-/var/lib/ifta}/state:/app/data/state:Z
+      - ifta-rates:/app/data/rates
+      - ${IFTA_BACKUP_HOST_DIR:-/var/lib/ifta/backups}:/backups:Z
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["backup"]
+
+volumes:
+  # Seeded from the image's committed rate cache on first run — see the header.
+  ifta-rates:

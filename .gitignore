@@ -1,6 +1,7 @@
 # Secrets
 .env
 .env.local
+deploy/oracle/.env
 *.pem
 *.key
 
@@ -36,6 +37,11 @@ tmp/
 
 # Telegram/customer runtime uploads and generated packets
 inbox/*/
+# ...except the synthetic TEST LOGISTICS quarter. It is generated data (no PII)
+# and it is what makes the penny-accurate regression in
+# tests/test_q2_2026_synthetic.py runnable on a clean checkout — the
+# real-carrier regressions skip without their untracked inputs.
+!inbox/Q2-2026/
 outputs/*/
 data/telegram_access.json
 

@@ -11,7 +11,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ifta.calc import IftaReturn, StateLine
+from ifta.calc import IftaReturn, StateLine, round_half_up_int
 from ifta.models import CleanData
 
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -210,16 +210,16 @@ def _build_per_truck_sheet(ws: Worksheet, ret: IftaReturn, data: CleanData) -> N
         row_idx = data_start + i
         ws.cell(row=row_idx, column=sum_col, value=line.state)
         ws.cell(row=row_idx, column=sum_col + 1, value="Surcharge" if line.is_surcharge else "")
-        ws.cell(row=row_idx, column=sum_col + 2, value=int(round(line.miles)))
-        ws.cell(row=row_idx, column=sum_col + 3, value=int(round(line.miles)))
+        ws.cell(row=row_idx, column=sum_col + 2, value=round_half_up_int(line.miles))
+        ws.cell(row=row_idx, column=sum_col + 3, value=round_half_up_int(line.miles))
         ws.cell(
             row=row_idx,
             column=sum_col + 4,
             value=0.0 if line.is_surcharge else round(ret.fleet_mpg, 2),
         )
-        ws.cell(row=row_idx, column=sum_col + 5, value=int(round(line.taxable_gal)))
-        ws.cell(row=row_idx, column=sum_col + 6, value=int(round(line.tax_paid_gal)))
-        ws.cell(row=row_idx, column=sum_col + 7, value=int(round(line.net_taxable_gal)))
+        ws.cell(row=row_idx, column=sum_col + 5, value=round_half_up_int(line.taxable_gal))
+        ws.cell(row=row_idx, column=sum_col + 6, value=round_half_up_int(line.tax_paid_gal))
+        ws.cell(row=row_idx, column=sum_col + 7, value=round_half_up_int(line.net_taxable_gal))
         ws.cell(row=row_idx, column=sum_col + 8, value=round(line.rate, 4))
         c = ws.cell(row=row_idx, column=sum_col + 9, value=round(line.tax_due, 2))
         c.number_format = MONEY_FMT
@@ -227,10 +227,10 @@ def _build_per_truck_sheet(ws: Worksheet, ret: IftaReturn, data: CleanData) -> N
     sum_total_row = data_start + len(ret.lines)
     ws.cell(row=sum_total_row, column=sum_col, value="TOTAL").font = TOTAL_FONT
     ws.cell(
-        row=sum_total_row, column=sum_col + 2, value=int(round(ret.fleet_miles))
+        row=sum_total_row, column=sum_col + 2, value=round_half_up_int(ret.fleet_miles)
     ).font = TOTAL_FONT
     ws.cell(
-        row=sum_total_row, column=sum_col + 3, value=int(round(ret.fleet_miles))
+        row=sum_total_row, column=sum_col + 3, value=round_half_up_int(ret.fleet_miles)
     ).font = TOTAL_FONT
     total_cell = ws.cell(row=sum_total_row, column=sum_col + 9, value=round(ret.total_tax_due, 2))
     total_cell.font = TOTAL_FONT
@@ -269,12 +269,12 @@ def _build_jurisdiction_sheet(ws: Worksheet, ret: IftaReturn) -> None:
         r = header_row + 1 + i
         ws.cell(row=r, column=1, value=line.state)
         ws.cell(row=r, column=2, value="Surcharge" if line.is_surcharge else "")
-        ws.cell(row=r, column=3, value=int(round(line.miles)))
-        ws.cell(row=r, column=4, value=int(round(line.miles)))
+        ws.cell(row=r, column=3, value=round_half_up_int(line.miles))
+        ws.cell(row=r, column=4, value=round_half_up_int(line.miles))
         ws.cell(row=r, column=5, value=0.0 if line.is_surcharge else round(ret.fleet_mpg, 2))
-        ws.cell(row=r, column=6, value=int(round(line.taxable_gal)))
-        ws.cell(row=r, column=7, value=int(round(line.tax_paid_gal)))
-        ws.cell(row=r, column=8, value=int(round(line.net_taxable_gal)))
+        ws.cell(row=r, column=6, value=round_half_up_int(line.taxable_gal))
+        ws.cell(row=r, column=7, value=round_half_up_int(line.tax_paid_gal))
+        ws.cell(row=r, column=8, value=round_half_up_int(line.net_taxable_gal))
         ws.cell(row=r, column=9, value=round(line.rate, 4))
         ws.cell(row=r, column=10, value=round(line.tax_due, 2)).number_format = MONEY_FMT
         ws.cell(row=r, column=11, value=0.0).number_format = MONEY_FMT
@@ -282,8 +282,8 @@ def _build_jurisdiction_sheet(ws: Worksheet, ret: IftaReturn) -> None:
 
     total_row = header_row + 1 + len(ret.lines)
     ws.cell(row=total_row, column=1, value="TOTAL").font = TOTAL_FONT
-    ws.cell(row=total_row, column=3, value=int(round(ret.fleet_miles))).font = TOTAL_FONT
-    ws.cell(row=total_row, column=4, value=int(round(ret.fleet_miles))).font = TOTAL_FONT
+    ws.cell(row=total_row, column=3, value=round_half_up_int(ret.fleet_miles)).font = TOTAL_FONT
+    ws.cell(row=total_row, column=4, value=round_half_up_int(ret.fleet_miles)).font = TOTAL_FONT
     c10 = ws.cell(row=total_row, column=10, value=round(ret.total_tax_due, 2))
     c10.font = TOTAL_FONT
     c10.number_format = MONEY_FMT
@@ -460,19 +460,19 @@ def write_portal_csv(ret: IftaReturn, out_path: Path, *, portal: str = "generic"
                     jur_name(line),
                     "Surcharge" if line.is_surcharge else "",
                     fuel_label,
-                    int(round(line.miles)),
-                    int(round(line.miles)),  # taxable miles = total (no exempt-miles claim)
+                    round_half_up_int(line.miles),
+                    round_half_up_int(line.miles),  # taxable miles = total (no exempt-miles claim)
                     mpg,
-                    int(round(line.taxable_gal)),
-                    int(round(line.tax_paid_gal)),
-                    int(round(line.net_taxable_gal)),
+                    round_half_up_int(line.taxable_gal),
+                    round_half_up_int(line.tax_paid_gal),
+                    round_half_up_int(line.net_taxable_gal),
                     f"{line.rate:.4f}",
                     f"{line.tax_due:.2f}",
                     "0.00",
                     f"{line.tax_due:.2f}",
                 ]
             )
-        total_miles = int(round(ret.fleet_miles))
+        total_miles = round_half_up_int(ret.fleet_miles)
         w.writerow(
             [
                 "TOTAL",
@@ -572,7 +572,7 @@ def write_truck_filing_xlsx(
         ("Quarter", quarter, None),
         ("Fuel type", fuel.title(), None),
         ("Period", period_str, None),
-        ("Truck total miles", int(round(truck_total_miles)), "#,##0"),
+        ("Truck total miles", round_half_up_int(truck_total_miles), "#,##0"),
         ("Gallons purchased", round(truck_total_tax_paid_gal, 2), "#,##0.00"),
         ("Fleet MPG (used for tax calc)", round(fleet_mpg, 2), "0.00"),
         ("Truck's share of net tax", round(truck_net_tax, 2), MONEY_FMT),
@@ -614,12 +614,12 @@ def write_truck_filing_xlsx(
         ws.cell(row=r, column=1, value=ln.state)
         ws.cell(row=r, column=2, value="Surcharge" if ln.is_surcharge else "")
         ws.cell(row=r, column=3, value=fuel_label)
-        ws.cell(row=r, column=4, value=int(round(ln.miles)))
-        ws.cell(row=r, column=5, value=int(round(ln.miles)))
+        ws.cell(row=r, column=4, value=round_half_up_int(ln.miles))
+        ws.cell(row=r, column=5, value=round_half_up_int(ln.miles))
         ws.cell(row=r, column=6, value=0.0 if ln.is_surcharge else round(fleet_mpg, 2))
-        ws.cell(row=r, column=7, value=int(round(ln.taxable_gal)))
-        ws.cell(row=r, column=8, value=int(round(ln.tax_paid_gal)))
-        ws.cell(row=r, column=9, value=int(round(ln.net_taxable_gal)))
+        ws.cell(row=r, column=7, value=round_half_up_int(ln.taxable_gal))
+        ws.cell(row=r, column=8, value=round_half_up_int(ln.tax_paid_gal))
+        ws.cell(row=r, column=9, value=round_half_up_int(ln.net_taxable_gal))
         ws.cell(row=r, column=10, value=round(ln.rate, 4))
         ws.cell(row=r, column=11, value=round(ln.tax_due, 2)).number_format = MONEY_FMT
         ws.cell(row=r, column=12, value=0.0).number_format = MONEY_FMT
@@ -628,11 +628,11 @@ def write_truck_filing_xlsx(
     # ----- TOTAL row (P0c — fill the gallon totals too) -----
     total_row = header_row + 1 + len(lines)
     ws.cell(row=total_row, column=1, value="TOTAL").font = TOTAL_FONT
-    ws.cell(row=total_row, column=4, value=int(round(truck_total_miles))).font = TOTAL_FONT
-    ws.cell(row=total_row, column=5, value=int(round(truck_total_miles))).font = TOTAL_FONT
-    ws.cell(row=total_row, column=7, value=int(round(truck_total_taxable_gal))).font = TOTAL_FONT
-    ws.cell(row=total_row, column=8, value=int(round(truck_total_tax_paid_gal))).font = TOTAL_FONT
-    ws.cell(row=total_row, column=9, value=int(round(truck_total_net_gal))).font = TOTAL_FONT
+    ws.cell(row=total_row, column=4, value=round_half_up_int(truck_total_miles)).font = TOTAL_FONT
+    ws.cell(row=total_row, column=5, value=round_half_up_int(truck_total_miles)).font = TOTAL_FONT
+    ws.cell(row=total_row, column=7, value=round_half_up_int(truck_total_taxable_gal)).font = TOTAL_FONT
+    ws.cell(row=total_row, column=8, value=round_half_up_int(truck_total_tax_paid_gal)).font = TOTAL_FONT
+    ws.cell(row=total_row, column=9, value=round_half_up_int(truck_total_net_gal)).font = TOTAL_FONT
     c11 = ws.cell(row=total_row, column=11, value=round(truck_net_tax, 2))
     c11.font = TOTAL_FONT
     c11.number_format = MONEY_FMT
