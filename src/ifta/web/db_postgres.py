@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -87,7 +88,7 @@ def _dsn() -> str:
 
 
 @contextmanager
-def _connect() -> Iterator[psycopg.Connection]:
+def _connect() -> Iterator[psycopg.Connection[dict[str, Any]]]:
     """One connection per call, committed on clean exit (mirrors SQLite backend)."""
     conn = psycopg.connect(_dsn(), row_factory=dict_row)
     try:
@@ -197,7 +198,7 @@ def confirm_submission(path: Path, token: str) -> Submission | None:
         row = conn.execute(
             "SELECT * FROM submissions WHERE confirm_token = %s", (token,)
         ).fetchone()
-    return _row_to_submission(row)
+    return _row_to_submission(row) if row else None
 
 
 def mark_packet_sent(path: Path, submission_id: str) -> None:
@@ -239,7 +240,7 @@ def claim_next_queued(path: Path) -> Submission | None:
         claimed = conn.execute(
             "SELECT * FROM submissions WHERE id = %s", (row["id"],)
         ).fetchone()
-    return _row_to_submission(claimed)
+    return _row_to_submission(claimed) if claimed else None
 
 
 def mark_done(path: Path, submission_id: str) -> None:
