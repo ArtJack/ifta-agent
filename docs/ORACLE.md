@@ -61,9 +61,22 @@ biggest reason to prefer the tunnel over a public IP plus Caddy.
 - Keys in hand: Anthropic, Resend, Turnstile secret, Telegram bot token.
 
 ```bash
-sudo dnf -y install git
-sudo git clone https://github.com/ArtJack/ifta-agent /opt/ifta-agent
+sudo apt-get -y install git      # dnf on Oracle Linux
+sudo install -d -o "$USER" -g "$USER" /opt/ifta-agent
+git clone git@github.com:ArtJack/ifta-agent /opt/ifta-agent
 ```
+
+Two things about that clone worth knowing before it fails on you:
+
+* **The repo is private**, so anonymous HTTPS will not work. The box needs an
+  SSH key that GitHub accepts — either an account key or a deploy key on this
+  repo.
+* **Clone as the deploy user, not as root.** Git authentication is per-user: a
+  `sudo git clone` looks in `/root/.ssh`, finds no key, and fails with
+  `Host key verification failed` — an error that names the host key and so
+  reads as a network or `known_hosts` problem rather than the permissions one
+  it actually is. The checkout must stay owned by that same user, because
+  `update.sh` pulls as whoever owns it.
 
 Everything below assumes `PROJECT=/opt/ifta-agent`.
 
