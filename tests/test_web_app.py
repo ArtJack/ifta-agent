@@ -783,3 +783,48 @@ def test_submit_add_rejected_for_closed_submission(
     )
     assert r.status_code == 409
     assert "rejected" in r.json()["detail"].lower()
+
+
+# --- API schema exposure -------------------------------------------------
+#
+# The deployed API is reachable from the public internet. An interactive
+# schema browser there hands out the full route list, every request shape and
+# every field name, so these endpoints are off unless explicitly enabled.
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_endpoints_absent_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Fail closed: nothing set means nothing served."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.delenv("IFTA_WEB_ENABLE_DOCS", raising=False)
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get(path).status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_endpoints_served_when_explicitly_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """The local-dev escape hatch still works when asked for by name."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.setenv("IFTA_WEB_ENABLE_DOCS", "1")
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get(path).status_code == 200
+
+
+def test_schema_endpoints_ignore_a_falsy_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"0"/"false" must not read as enabled — the bug this guard exists for."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.setenv("IFTA_WEB_ENABLE_DOCS", "0")
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get("/openapi.json").status_code == 404
