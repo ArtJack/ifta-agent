@@ -104,6 +104,52 @@ def test_submit_creates_submission_and_saves_files(
     assert (inbox / "fuel_fuel.csv").read_bytes() == fuel_csv
 
 
+def test_submit_accepts_receipt_images_in_multi_file_upload(
+    client: TestClient, submissions_root: Path
+) -> None:
+    r = client.post(
+        "/submit",
+        data={"email": "customer@example.com", "quarter": "Q1-2026"},
+        files=[
+            ("files", ("miles.csv", b"truck,state,miles\nT1,KY,1000\n", "text/csv")),
+            ("files", ("receipt.jpg", b"fake jpg bytes", "image/jpeg")),
+            ("files", ("receipt.heic", b"fake heic bytes", "image/heic")),
+        ],
+    )
+    assert r.status_code == 202, r.text
+
+    sid = r.json()["submission_id"]
+    inbox = submissions_root / sid / "inbox" / "Q1-2026"
+    assert {p.name for p in inbox.iterdir()} == {
+        "file_miles.csv",
+        "file_receipt.jpg",
+        "file_receipt.heic",
+    }
+
+
+def test_submit_accepts_legacy_data_files_with_extra_receipts(
+    client: TestClient, submissions_root: Path
+) -> None:
+    r = client.post(
+        "/submit",
+        data={"email": "customer@example.com", "quarter": "Q4-2025"},
+        files=[
+            ("mileage_file", ("miles.csv", b"truck,state,miles\nT1,KY,1000\n", "text/csv")),
+            ("fuel_file", ("fuel.csv", b"truck,state,gallons\nT1,KY,150\n", "text/csv")),
+            ("files", ("receipt.png", b"fake png bytes", "image/png")),
+        ],
+    )
+    assert r.status_code == 202, r.text
+
+    sid = r.json()["submission_id"]
+    inbox = submissions_root / sid / "inbox" / "Q4-2025"
+    assert {p.name for p in inbox.iterdir()} == {
+        "mileage_miles.csv",
+        "fuel_fuel.csv",
+        "file_receipt.png",
+    }
+
+
 def test_status_returns_submission_state(client: TestClient) -> None:
     r = client.post(
         "/submit",
@@ -783,3 +829,48 @@ def test_submit_add_rejected_for_closed_submission(
     )
     assert r.status_code == 409
     assert "rejected" in r.json()["detail"].lower()
+
+
+# --- API schema exposure -------------------------------------------------
+#
+# The deployed API is reachable from the public internet. An interactive
+# schema browser there hands out the full route list, every request shape and
+# every field name, so these endpoints are off unless explicitly enabled.
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_endpoints_absent_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Fail closed: nothing set means nothing served."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.delenv("IFTA_WEB_ENABLE_DOCS", raising=False)
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get(path).status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_schema_endpoints_served_when_explicitly_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """The local-dev escape hatch still works when asked for by name."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.setenv("IFTA_WEB_ENABLE_DOCS", "1")
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get(path).status_code == 200
+
+
+def test_schema_endpoints_ignore_a_falsy_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"0"/"false" must not read as enabled — the bug this guard exists for."""
+    monkeypatch.setenv("IFTA_WEB_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("IFTA_WEB_SUBMISSIONS_DIR", str(tmp_path / "subs"))
+    monkeypatch.setenv("IFTA_WEB_ENABLE_DOCS", "0")
+    from ifta.web.app import create_app
+
+    assert TestClient(create_app()).get("/openapi.json").status_code == 404

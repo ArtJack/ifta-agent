@@ -54,7 +54,23 @@ log = logging.getLogger("ifta.web.app")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".pdf"}
+DATA_EXTENSIONS = {".csv", ".xlsx", ".xls", ".xlsm", ".pdf"}
+RECEIPT_IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".tif",
+    ".tiff",
+    ".gif",
+}
+ALLOWED_EXTENSIONS = DATA_EXTENSIONS | RECEIPT_IMAGE_EXTENSIONS
+ALLOWED_EXTENSIONS_TEXT = (
+    ".csv, .xlsx, .xls, .xlsm, .pdf, or receipt images "
+    "(.jpg, .jpeg, .png, .webp, .heic, .heif, .tif, .tiff, .gif)"
+)
 DEFAULT_MAX_FILE_MB = 10
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
@@ -82,6 +98,17 @@ def _cors_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
+def _cors_origin_regex() -> str | None:
+    """Optional regex allow-list for dynamic origins that can't be enumerated.
+
+    Vercel preview deployments get a fresh subdomain per deploy
+    (e.g. artjeck-technology-git-<branch>-<team>.vercel.app), so no static
+    list can keep up. Set IFTA_WEB_CORS_ORIGIN_REGEX to a full-match pattern
+    (Starlette uses re.fullmatch) scoped to the project's vercel.app hosts.
+    """
+    return os.environ.get("IFTA_WEB_CORS_ORIGIN_REGEX") or None
+
+
 def _submit_rate_limit() -> str:
     return os.environ.get("IFTA_WEB_SUBMIT_RATE_LIMIT", "3/hour")
 
@@ -94,17 +121,42 @@ def _backend_key() -> str | None:
     return os.environ.get("IFTA_WEB_BACKEND_KEY") or None
 
 
+def _docs_enabled() -> bool:
+    """Whether to serve /docs, /redoc and /openapi.json.
+
+    Off unless IFTA_WEB_ENABLE_DOCS is explicitly truthy. This is deliberately
+    fail-closed: the deployed API is reachable from the public internet, and an
+    interactive schema browser hands an attacker the full route list, every
+    request shape and every field name for free. Turn it on locally when you
+    want the browser; production simply never sets it.
+    """
+    return os.environ.get("IFTA_WEB_ENABLE_DOCS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def create_app() -> FastAPI:
     """Factory used by uvicorn (`ifta.web.app:create_app --factory`).
 
     Reads env vars at call time, so tests can monkeypatch env then call
     create_app() to get a fresh, isolated instance.
     """
-    app = FastAPI(title="IFTA Intake API")
+    docs_on = _docs_enabled()
+    app = FastAPI(
+        title="IFTA Intake API",
+        # None on all three removes the routes entirely rather than hiding them.
+        docs_url="/docs" if docs_on else None,
+        redoc_url="/redoc" if docs_on else None,
+        openapi_url="/openapi.json" if docs_on else None,
+    )
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
+        allow_origin_regex=_cors_origin_regex(),
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
@@ -202,17 +254,17 @@ def create_app() -> FastAPI:
             ):
                 raise HTTPException(status_code=400, detail="CAPTCHA verification failed")
 
-        # Collect all uploads — either the multi-file `files` field, or the
-        # legacy mileage_file / fuel_file pair. At least one file is required.
+        # Collect all uploads. The `files` field is the modern multi-file path;
+        # legacy mileage_file / fuel_file are still accepted and may now travel
+        # with extra receipt photos/PDFs in `files`.
         all_uploads: list[tuple[UploadFile, str]] = []
+        if mileage_file:
+            all_uploads.append((mileage_file, "mileage"))
+        if fuel_file:
+            all_uploads.append((fuel_file, "fuel"))
         if files:
             for f in files:
                 all_uploads.append((f, "file"))
-        else:
-            if mileage_file:
-                all_uploads.append((mileage_file, "mileage"))
-            if fuel_file:
-                all_uploads.append((fuel_file, "fuel"))
 
         if not all_uploads:
             raise HTTPException(status_code=400, detail="at least one file is required")
@@ -444,7 +496,7 @@ def _validate_upload(f: UploadFile) -> None:
             status_code=400,
             detail=(
                 f"unsupported file type: {ext or '(no extension)'} "
-                "— use .csv, .xlsx, .xls, or .pdf"
+                f"— use {ALLOWED_EXTENSIONS_TEXT}"
             ),
         )
 
