@@ -123,13 +123,37 @@ def _backend_key() -> str | None:
     return os.environ.get("IFTA_WEB_BACKEND_KEY") or None
 
 
+def _docs_enabled() -> bool:
+    """Whether to serve /docs, /redoc and /openapi.json.
+
+    Off unless IFTA_WEB_ENABLE_DOCS is explicitly truthy. This is deliberately
+    fail-closed: the deployed API is reachable from the public internet, and an
+    interactive schema browser hands an attacker the full route list, every
+    request shape and every field name for free. Turn it on locally when you
+    want the browser; production simply never sets it.
+    """
+    return os.environ.get("IFTA_WEB_ENABLE_DOCS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def create_app() -> FastAPI:
     """Factory used by uvicorn (`ifta.web.app:create_app --factory`).
 
     Reads env vars at call time, so tests can monkeypatch env then call
     create_app() to get a fresh, isolated instance.
     """
-    app = FastAPI(title="IFTA Intake API")
+    docs_on = _docs_enabled()
+    app = FastAPI(
+        title="IFTA Intake API",
+        # None on all three removes the routes entirely rather than hiding them.
+        docs_url="/docs" if docs_on else None,
+        redoc_url="/redoc" if docs_on else None,
+        openapi_url="/openapi.json" if docs_on else None,
+    )
 
     app.add_middleware(
         CORSMiddleware,
