@@ -1,3 +1,12 @@
+> **ARCHIVED — this deployment no longer exists.**
+>
+> The Azure Container Apps deployment was torn down in August 2026 when IFTA
+> moved to the Oracle Cloud box (`docs/ORACLE.md`), and the sponsoring credit
+> expires 2026-10-09. Resource group `rg-ifta` is deleted; the Bicep templates
+> and the deploy workflow were removed with it. Kept only as a record of how it
+> was built. **This is not a rollback path** — to recover production, restore
+> from a snapshot per `docs/ORACLE.md`.
+
 # IFTA on Azure — deployment runbook
 
 > **Superseded.** Production has moved to the Oracle Linux box — see

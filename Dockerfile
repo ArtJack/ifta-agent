@@ -51,15 +51,18 @@ RUN set -eux; \
 # cached until pyproject or src changes. The extras add psycopg for the Postgres
 # backend (both deployments) and, for `oracle`, boto3 for R2 replication. The
 # base deps ship manylinux wheels, so no compiler toolchain is needed.
-ARG EXTRAS=azure
+# Defaults to the extra production actually runs. It used to default to
+# `azure`, so a build outside compose silently produced an image with no
+# boto3 — and `ifta backup` in it could not replicate to R2.
+ARG EXTRAS=oracle
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install -e ".[${EXTRAS}]"
 
 # Tracked, non-PII app data that ships in the image: the IFTA regulations KB
 # and seed rate matrices. Runtime/PII data (real client history, web
-# submissions, traces, job DB) is NOT baked in — it arrives via Azure Files
-# mounts / Postgres in production (see .dockerignore and deploy/azure).
+# submissions, traces, job DB) is NOT baked in — it arrives via the bind
+# mounts under /var/lib/ifta and Postgres (see .dockerignore and deploy/oracle).
 COPY data ./data
 
 # Drop root. Azure Files volumes mount world-writable, so uid 10001 can write
