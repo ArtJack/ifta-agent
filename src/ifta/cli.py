@@ -1094,6 +1094,91 @@ def backup_restore(snapshot: Path, into: Path | None) -> None:
     )
 
 
+@main.command(name="qa-filing-day")
+@click.option("--quarter", required=True, help="e.g. Q2-2026")
+@click.option("--client", default=None, help="Client id/name for the report label.")
+@click.option("--fuel", default="diesel", show_default=True)
+@click.option(
+    "--local-url",
+    default=None,
+    help="Local health endpoint to also check. Only meaningful on the server "
+    "or inside the container (e.g. http://127.0.0.1:8000/healthz).",
+)
+@click.option(
+    "--public-url",
+    default="https://ifta-api.artjeck.com/healthz",
+    show_default=True,
+    help="Public web health endpoint.",
+)
+@click.option("--skip-public", is_flag=True, help="Skip the public health check.")
+@click.option("--skip-tests", is_flag=True, help="Skip targeted pytest smoke checks.")
+@click.option("--refresh-rates", is_flag=True, help="Re-fetch IFTA rates before checking.")
+@click.option(
+    "--backup-dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Backup dir to check. Default $IFTA_BACKUP_DIR. On the production box "
+    "the snapshots are in /var/lib/ifta/backups.",
+)
+@click.option("--max-backup-age-hours", default=24.0, show_default=True, type=float)
+@click.option("--pytest-timeout", default=120, show_default=True, type=int)
+@click.option(
+    "--out",
+    "out_dir",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Report directory. Defaults to data/qa/.",
+)
+def qa_filing_day(
+    quarter: str,
+    client: str | None,
+    fuel: str,
+    local_url: str | None,
+    public_url: str,
+    skip_public: bool,
+    skip_tests: bool,
+    refresh_rates: bool,
+    backup_dir: Path | None,
+    max_backup_age_hours: float,
+    pytest_timeout: int,
+    out_dir: Path | None,
+) -> None:
+    """Run filing-day QA gates and write an evidence report."""
+    from ifta.qa import run_filing_day_qa, write_report
+
+    qkey = _parse_quarter(quarter)
+    report = run_filing_day_qa(
+        project_root=PROJECT_ROOT,
+        quarter=qkey,
+        client=client,
+        fuel=fuel,
+        local_url=local_url,
+        public_url=public_url,
+        backup_dir=backup_dir,
+        max_backup_age_hours=max_backup_age_hours,
+        skip_public=skip_public,
+        skip_tests=skip_tests,
+        force_rates=refresh_rates,
+        pytest_timeout=pytest_timeout,
+    )
+    path = write_report(report, out_dir or PROJECT_ROOT / "data" / "qa")
+
+    table = Table(title=f"Filing-day QA — {qkey}")
+    table.add_column("Check")
+    table.add_column("Status", justify="center")
+    table.add_column("Detail")
+    for check in report.checks:
+        style = {"PASS": "green", "WARN": "yellow", "FAIL": "red", "SKIP": "dim"}[
+            check.status
+        ]
+        table.add_row(check.name, check.status, check.detail, style=style)
+    console.print(table)
+    console.print(f"[bold]QA verdict:[/] {report.verdict}")
+    console.print(f"[dim]report: {_display_path(path)}[/]")
+    if report.verdict == "FAIL":
+        raise click.exceptions.Exit(code=1)
+
+
 @main.command(name="benchmark")
 @click.option(
     "--model", default="claude-sonnet-4-6", show_default=True,

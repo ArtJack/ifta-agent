@@ -34,7 +34,13 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 from ifta.backup_remote import RemoteConfig, prune_remote, upload_snapshot
 
-DEFAULT_BACKUP_DIR = Path("/Volumes/DISK/AI/ifta-backups")
+# Where the production box keeps its snapshots (bind-mounted to /backups in
+# the backup container). This used to default to the Mac mini's lab-share
+# path; that share still exists on the old dev machine and still holds
+# months-old snapshots, so the stale default made `backup-list` and the
+# filing-day QA report a confident PASS while looking at the wrong host's
+# data. $IFTA_BACKUP_DIR still overrides for local snapshots.
+DEFAULT_BACKUP_DIR = Path("/var/lib/ifta/backups")
 # Deliberately small: these are full snapshots of the same small dataset, so
 # holding a long tail buys nothing. Each run drops the oldest beyond this.
 DEFAULT_KEEP = 3
