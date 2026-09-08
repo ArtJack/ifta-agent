@@ -36,7 +36,11 @@ scratch/
 tmp/
 
 # Telegram/customer runtime uploads and generated packets
-inbox/*/
+# Note the trailing-slash-free pattern: `inbox/*/` ignored subdirectories but
+# NOT loose files dropped at the top of inbox/, and those are customer
+# exports too. This repo is public, so that gap was one `git add -A` away
+# from publishing a carrier's mileage.
+inbox/*
 # ...except the synthetic TEST LOGISTICS quarter. It is generated data (no PII)
 # and it is what makes the penny-accurate regression in
 # tests/test_q2_2026_synthetic.py runnable on a clean checkout — the
@@ -69,3 +73,6 @@ logs/
 
 # Worktree directories created by Claude Code — not part of the project.
 .claude/worktrees/
+
+# Local AI tool config (aider), not part of the project.
+.aider.conf.yml

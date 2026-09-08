@@ -44,15 +44,12 @@ dev = [
     # database to run the round-trip set (see tests/test_web_db_postgres.py).
     "psycopg[binary]>=3.2",
 ]
-# Azure production runtime. psycopg[binary] bundles libpq (no system libpq
-# needed), enabling the Postgres job-state backend selected by IFTA_WEB_DB_URL.
-# Purely additive: unset the URL and the app still uses SQLite (Mac mini / local).
-azure = [
-    "psycopg[binary]>=3.2",
-]
-# Oracle Linux production runtime: the same Postgres backend, plus boto3 for
-# replicating nightly snapshots to Cloudflare R2 (S3-compatible). Kept separate
-# from `azure` so neither deployment carries the other's dependencies.
+# Production runtime (the Oracle Cloud box). psycopg[binary] bundles libpq, so
+# no system libpq is needed, and enables the Postgres job-state backend selected
+# by IFTA_WEB_DB_URL; boto3 replicates nightly snapshots to Cloudflare R2.
+# Purely additive: unset the URL and the app still uses SQLite for local work.
+# The former `azure` extra was dropped with that deployment — it had become an
+# alias for this one's Postgres dependency.
 oracle = [
     "psycopg[binary]>=3.2",
     "boto3>=1.34",
