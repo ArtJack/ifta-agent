@@ -20,7 +20,17 @@ from ifta.ingest import ingest_file, ingest_folder
 from ifta.validator import load_kb
 
 SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xlsm", ".xls", ".pdf"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
+IMAGE_SUFFIXES = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".heic",
+    ".heif",
+    ".tif",
+    ".tiff",
+    ".gif",
+}
 PreflightSeverity = Literal["error", "warning", "info"]
 
 

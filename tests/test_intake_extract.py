@@ -6,6 +6,7 @@ The live Claude call is never exercised here — `extract_one` takes an injectab
 """
 
 from ifta.intake.extract import (
+    EXTRACTION_PROMPT,
     candidate_from_payload,
     discover_images,
     extract_one,
@@ -84,6 +85,42 @@ def test_extract_one_uses_injected_call(tmp_path):
     assert c.state == "CA"
     assert c.gallons == 88.2
     assert c.source_file == "receipt.jpg"
+
+
+def test_named_regression_multi_receipt_photo_guard_requires_review(tmp_path):
+    """Two receipts in one photo must never be silently auto-included."""
+    assert "MULTIPLE RECEIPTS in one image" in EXTRACTION_PROMPT
+    assert "EVERY confidence <= 0.4" in EXTRACTION_PROMPT
+
+    img = tmp_path / "multi-receipt-photo.jpg"
+    img.write_bytes(b"fake-jpeg-bytes")
+    canned = {
+        "date": "2026-04-10",
+        "state": "AZ",
+        "gallons": 74.25,
+        "amount": 294.03,
+        "vendor": "Pilot",
+        "fuel_type": "diesel",
+        "truck_id": "55",
+        "payment_method": "fleet_card",
+        "confidence": {
+            "date": 0.4,
+            "state": 0.4,
+            "gallons": 0.4,
+            "amount": 0.4,
+            "truck_id": 0.4,
+        },
+    }
+
+    candidate = extract_one(img, model="unused", call=lambda _p: canned)
+    assert candidate.source_file == "multi-receipt-photo.jpg"
+    assert all(value <= 0.4 for value in candidate.confidence.values())
+
+    review = review_receipt(candidate)
+    assert review.status == "NEEDS_REVIEW_LOW_CONFIDENCE"
+    assert review.requires_human_review
+    assert not review.can_auto_include
+    assert "LOW_EXTRACTION_CONFIDENCE" in {issue.code for issue in review.issues}
 
 
 def test_write_then_load_is_pipeline_compatible(tmp_path):
