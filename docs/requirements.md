@@ -38,7 +38,7 @@ to put on a government tax form.
   high-risk filings. Target ≤ ~$0.15 model cost per reviewed filing.
 - **NFR-5 Security/PII.** Customer receipts, labels, traces, and Telegram IDs are git-ignored,
   never committed. Magic-link tokens, CAPTCHA, per-IP rate limiting, atomic writes.
-- **NFR-6 Cheap to run.** No cloud GPU bill — backend on a Mac mini behind a Cloudflare Tunnel,
+- **NFR-6 Cheap to run.** No cloud GPU bill — backend on an always-free Oracle Cloud VM behind a Cloudflare Tunnel,
   frontend on Vercel.
 
 ## 5. Out of scope (current)

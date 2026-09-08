@@ -23,7 +23,7 @@ A two-layer system, deliberately split:
 1. **A deterministic pipeline** (`ingest → calc → validate → report`) that does all the
    *math* — parses CSV/Excel/PDF exports, computes fleet MPG, taxable gallons, and per-
    jurisdiction tax/surcharge, and writes the gov-portal CSV + a review Excel.
-2. **An LLM review agent** (Anthropic SDK, **16 tools**) that does the *judgment* — it can
+2. **An LLM review agent** (Anthropic SDK, **17 tools**) that does the *judgment* — it can
    query the computed return, the rule base, the live rate matrix, and **21 quarters of real
    filing history across two carriers**, and writes a pre-filing review note flagging anything
    that looks off before a human submits.
@@ -38,24 +38,24 @@ approval gate**, magic-link "send more files" flows, email delivery, CAPTCHA, an
  customer ──upload──▶ artjeck.com/ifta  (Next.js 16 on Vercel)
                             │  server-side proxy (X-Backend-Key, hides the backend)
                             ▼
-              ifta-api.artjeck.com  (FastAPI, Cloudflare Tunnel → Mac mini)
+              ifta-api.artjeck.com  (FastAPI, Cloudflare Tunnel → Oracle Cloud VM)
                             │
         ┌───────────────────┼─────────────────────────┐
         ▼                   ▼                         ▼
   deterministic        review agent              operator gate
-  pipeline             (Claude + 16 tools)       (Telegram approve/reject)
+  pipeline             (Claude + 17 tools)       (Telegram approve/reject)
   ingest/calc/         grounded in returns,      → packet emailed (Resend)
   validate/report      rules, rates, history
 ```
 
-No cloud GPU bill: the backend runs on a Mac mini behind a Cloudflare Tunnel; the frontend
+No cloud GPU bill: the backend runs on an always-free Oracle Cloud VM behind a Cloudflare Tunnel; the frontend
 is on Vercel. The only variable cost is the model spend per review.
 
 ## The engineering decisions I'd want to talk about in an interview
 
 - **Math is deterministic; the LLM only reviews.** The agent never *computes* the tax — it
   checks work that Python already did. That's the difference between a tool a carrier can
-  trust for a government filing and a demo. The agent is grounded by 16 tools so it cites real
+  trust for a government filing and a demo. The agent is grounded by 17 tools so it cites real
   numbers instead of inventing them.
 - **Regression tested to the penny.** Tests assert that fleet MPG, miles, and total tax due
   match known-correct historical filings exactly — so a refactor can't silently change a
@@ -66,7 +66,7 @@ is on Vercel. The only variable cost is the model spend per review.
 - **Real-world safety, not toy auth.** Multi-tenant isolation per client, an operator
   approval step before any customer file is processed, magic-link tokens as auth, Turnstile
   CAPTCHA, per-IP rate limiting, and atomic "all files land or none do" submission writes.
-- **Pragmatic deployment.** Mac mini + Cloudflare Tunnel (no public IP, no server bill) +
+- **Pragmatic deployment.** Oracle Cloud free tier + Cloudflare Tunnel (no public IP, no server bill) +
   Vercel front end — the cheapest path to a real, always-on production service.
 
 ## The evaluation harness — the part I'd want to be judged on
@@ -140,11 +140,17 @@ attention on the material exceptions, like a good auditor. Reproducible via
 > been overflowing the token budget and silently truncating to a deterministic-only packet —
 > caught by **measuring at scale, not guessing**, and fixed before it ever hit a real fleet.
 
-## ☁️ Production infrastructure on Azure
+## ☁️ Production infrastructure
 
-The pipeline runs as a containerised, **infrastructure-as-code** deployment on Azure —
-the same code the Mac mini runs, flipped onto managed cloud services by a single
-environment variable, with the local deployment kept as a warm fallback.
+The pipeline runs as a containerised deployment on an always-free Oracle Cloud VM:
+Docker Compose under systemd, Postgres for job state, a Cloudflare Tunnel for ingress
+(no inbound port is open), and nightly snapshots replicated off-box to Cloudflare R2.
+
+It has moved host twice — Mac mini → Azure Container Apps → Oracle Cloud — and the
+pipeline code did not change for either move. The backend is selected by one
+environment variable (`IFTA_WEB_DB_URL` set ⇒ Postgres, unset ⇒ SQLite), and storage
+is path-based, so a host swap is a matter of mounts and a DSN. The Azure deployment
+below is described as it was built; it was torn down in August 2026.
 
 ```mermaid
 flowchart TB
@@ -189,7 +195,7 @@ The engineering choices worth talking about:
   `worker` (a poller), and the `telegram` bot — each the same container with a different command.
 - **Pluggable persistence.** The job store is a facade: SQLite on the single host, **Azure
   Database for PostgreSQL** in the cloud, chosen at runtime by one env var. The Postgres queue
-  claim uses `SELECT … FOR UPDATE SKIP LOCKED` for safe concurrent draining. All 429 tests keep
+  claim uses `SELECT … FOR UPDATE SKIP LOCKED` for safe concurrent draining. All 617 tests keep
   running on SQLite unchanged.
 - **Secrets never touch the image or env files** — they live in **Key Vault** and are read by a
   **user-assigned managed identity** that also pulls the image from **Container Registry** (no
@@ -222,7 +228,7 @@ Bicep (IaC) · GitHub Actions (OIDC) · Consumption Budgets.
 ## Résumé bullets (drop into your CV / LinkedIn)
 
 - Built and **shipped to production** an AI agent that automates quarterly IFTA fuel-tax
-  filing for trucking fleets — deterministic Python pipeline + a 16-tool Claude review agent —
+  filing for trucking fleets — deterministic Python pipeline + a 17-tool Claude review agent —
   now serving a recurring real-world client.
 - Engineered the system so the LLM **reviews** rather than computes, grounding every answer in
   real returns/rules/rate data; **regression-tested tax math to the penny** against historical
@@ -232,12 +238,12 @@ Bicep (IaC) · GitHub Actions (OIDC) · Consumption Budgets.
   prompt regression** (a field fell 91%→62%) before it reached the tax path and QA'd the gold
   labels themselves to a verified **100% on tax-critical fields** across 47 hand-labeled receipts.
 - Designed a multi-tenant FastAPI + Next.js service with operator approval, magic-link auth,
-  CAPTCHA, and rate limiting; deployed on a Mac mini via Cloudflare Tunnel + Vercel for ~$0
+  CAPTCHA, and rate limiting; deployed on an Oracle Cloud VM via Cloudflare Tunnel + Vercel for ~$0
   infra.
 - **Containerised and deployed the service to Azure as infrastructure-as-code** — Container Apps
   (web/worker/bot), managed PostgreSQL, Key Vault + managed identity, and a **credential-less
   GitHub Actions OIDC pipeline** defined in Bicep — behind a runtime backend switch that keeps
-  SQLite and all 429 tests green, with a Consumption Budget guardrail for cost control.
+  SQLite and all 617 tests green, with a Consumption Budget guardrail for cost control.
 - Cut quarterly filing prep from hours of manual spreadsheet work to **minutes**, with
   risk-tiered model selection (Haiku/Sonnet/Opus) for cost control.
 
@@ -249,9 +255,9 @@ Bicep (IaC) · GitHub Actions (OIDC) · Consumption Budgets.
    it's miserable. I built an AI agent that does it. It's live and a real carrier uses it."
 2. **(0:10–0:35) Show the product.** Open `artjeck.com/ifta`, upload a sample mileage + fuel
    file on `/ifta/submit`. Talk over the wait: "files go to a Next.js proxy, then my FastAPI
-   backend on a Mac mini behind a Cloudflare Tunnel."
+   backend on a free-tier Oracle Cloud VM behind a Cloudflare Tunnel."
 3. **(0:35–1:05) Show the smart part.** Open the review note / Excel packet. "The math is
-   deterministic Python — the LLM never computes the tax, it *reviews* it, grounded in 16
+   deterministic Python — the LLM never computes the tax, it *reviews* it, grounded in 17
    tools over the return, the rules, live rates, and 21 quarters of history. Here it flagged
    [X]."
 4. **(1:05–1:25) Show the rigor.** Flash the eval harness — "the benchmark gate caught a

@@ -1,7 +1,7 @@
 # IFTA Agent — quarterly fuel-tax filing pipeline with an LLM review agent
 
 **Status:** in production, filing every quarter for a real carrier (DM Express) ·
-**555 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
+**617 automated tests** · penny-accurate regression vs. real filings · ~$0.10 model cost per reviewed filing
 
 > Carriers drop in their messy mileage + fuel-card exports; minutes later they get a
 > filing-ready IFTA packet that an LLM agent has reviewed against the regulations and their
@@ -135,7 +135,7 @@ Admin:    /approve 555111222 dm_express
 
 When a customer sends `/request [company]`, the bot messages every admin with
 their Telegram ID and an `/approve ...` command you can paste back into the bot.
-Approvals are saved on the Mac mini in `data/telegram_access.json`, which is
+Approvals are saved on the production box in `/var/lib/ifta/state/telegram_access.json`, which is
 ignored by Git so customer Telegram IDs are not pushed to GitHub.
 
 The older manual method still works too. Ask each customer to open the bot in a
@@ -178,7 +178,7 @@ If current-quarter rates are unavailable, the bot marks the packet as
 
 ## Project layout
 
-**47 Python modules · 18k LOC · 555 tests across 46 files.** Layered by responsibility:
+**47 Python modules · 18k LOC · 617 tests across 49 files.** Layered by responsibility:
 
 ```
 src/ifta/
@@ -204,11 +204,11 @@ src/ifta/
    ├─ turnstile.py         # CAPTCHA   email.py  models.py  intake_brief.py
 
 docs/        requirements.md · design.md (SDD) · IFTA_RUNBOOK · ORACLE (deploy) · AZURE · BENCHMARK · JUDGE · TRACING
-deploy/      oracle/ (compose + systemd, current prod) · launchd/ (Mac mini) · azure/ (Bicep)
+deploy/      oracle/ (compose + systemd — the production deployment)
 evals/       benchmark history, cases, receipt eval reports (PII receipts git-ignored)
 data/        regulations KB · cached rate matrices · per-client history (git-ignored)
 ifta-portfolio/CASE-STUDY.md
-tests/       46 files, 555 tests — penny-accurate golden quarter runs on any checkout;
+tests/       46 files, 617 tests — penny-accurate golden quarter runs on any checkout;
              the real-carrier regressions need the private (git-ignored) inputs and skip without them
 ```
 
