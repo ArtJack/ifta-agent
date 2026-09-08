@@ -28,6 +28,7 @@ from ifta.rates import (
     FUEL_COLUMNS,
     RateMatrixInvalidError,
     RateTable,
+    _check_matrix,
     _parse_matrix,
     _strip_money,
     fetch_rates,
@@ -184,7 +185,7 @@ def test_committed_rate_matrices_parse_clean() -> None:
     assert cached, "expected committed rate matrices"
     for path in cached:
         raw = path.read_text(encoding="utf-8-sig", errors="replace")
-        rates, surcharges, unparseable = _parse_matrix(raw, DIESEL)
+        rates, surcharges, unparseable, _seen = _parse_matrix(raw, DIESEL)
         assert unparseable == [], f"{path.name} has unreadable cells: {unparseable}"
         assert len(rates) >= 50, f"{path.name} parsed only {len(rates)} jurisdictions"
         assert set(surcharges) == {"KY", "VA"}, f"{path.name} surcharges: {sorted(surcharges)}"
@@ -205,7 +206,7 @@ def _matrix_with_broken_kentucky() -> str:
 
 
 def test_unparseable_cell_is_reported_not_dropped() -> None:
-    rates, _, unparseable = _parse_matrix(_matrix_with_broken_kentucky(), DIESEL)
+    rates, _, unparseable, _seen = _parse_matrix(_matrix_with_broken_kentucky(), DIESEL)
     assert "KY" not in rates
     assert unparseable == ["KY"], "a jurisdiction we cannot price must be named, not omitted"
 
@@ -267,6 +268,34 @@ def test_cached_matrix_below_plausibility_floor_is_rejected(tmp_path, monkeypatc
 
     with pytest.raises(RateMatrixInvalidError, match="3Q2026"):
         fetch_rates("Q3-2026")
+
+
+@pytest.mark.parametrize(
+    "fuel", ["diesel", "gasoline", "propane", "lng", "cng", "ethanol", "hydrogen", "electricity"]
+)
+def test_every_fuel_type_loads_from_a_shipped_matrix(fuel: str) -> None:
+    """The plausibility floor must not be a diesel-shaped assumption.
+
+    Far fewer jurisdictions publish a rate for alternative fuels — hydrogen is
+    priced by about a dozen — so counting *priced* rows and demanding 50 rejects
+    a perfectly good matrix for ten of the fifteen fuels the code supports. What
+    the floor is really asking is "did we get an IFTA matrix, or a WAF error
+    page?", and that is answered by how many jurisdictions the file describes,
+    not by how many of them tax this particular fuel.
+    """
+    table = fetch_rates("Q2-2026", fuel=fuel)
+    assert table.rates, f"{fuel} priced no jurisdictions at all"
+    assert table.fallback_used is False
+
+
+def test_plausibility_floor_still_rejects_a_non_matrix() -> None:
+    """The floor must keep doing its actual job: catching a non-matrix response."""
+    rates, _surcharges, unparseable, seen = _parse_matrix(
+        "<html><body>Site maintenance</body></html>", DIESEL
+    )
+    assert seen == 0
+    with pytest.raises(RateMatrixInvalidError, match="jurisdictions"):
+        _check_matrix(rates, unparseable, seen, source="maintenance page")
 
 
 def test_rate_matrix_invalid_error_is_not_a_runtime_error() -> None:
