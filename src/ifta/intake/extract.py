@@ -15,15 +15,26 @@ unverified data behind human approval before it can touch the filing math.
 from __future__ import annotations
 
 import base64
+import io
 import re
-import subprocess
-import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from ifta.intake.receipts import ReceiptCandidate
+
+# HEIC/HEIF (the iPhone default) needs this plugin; importing it registers the
+# decoder with Pillow. It's a declared dependency — the guard is just defensive
+# so non-HEIC formats keep working even if the wheel is somehow missing.
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except ModuleNotFoundError:  # pragma: no cover - pillow-heif is a hard dependency
+    pass
 
 # Phone/scanner suffixes we treat as receipt photos.
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic", ".heif", ".tif", ".tiff"}
@@ -36,8 +47,8 @@ _NATIVE_MEDIA = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
-_MAX_DIRECT_BYTES = 3_500_000  # downscale anything larger via sips
-_SIPS_LONG_EDGE = 1600  # Claude's vision sweet spot is ~1568px on the long edge
+_MAX_DIRECT_BYTES = 3_500_000  # downscale anything larger before sending
+_JPEG_LONG_EDGE = 1600  # Claude's vision sweet spot is ~1568px on the long edge
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _FLOAT_FIELDS = {"gallons", "amount"}
 _PAYMENT_METHODS = {"fleet_card", "personal_card", "cash", "unknown"}
@@ -100,33 +111,29 @@ def discover_images(folder: Path) -> list[Path]:
     )
 
 
-def _sips_to_jpeg(path: Path) -> bytes:
-    """Convert/downscale any image to a reasonable JPEG using macOS ``sips``.
+def _convert_to_jpeg(path: Path) -> bytes:
+    """Convert/downscale any image to a reasonable JPEG using Pillow.
 
-    Used for HEIC/TIFF (which the API does not accept) and for oversized photos.
-    Kept dependency-free on purpose — the pipeline runs on a Mac mini.
+    Used for HEIC/TIFF (which the vision API does not accept) and for oversized
+    photos. Cross-platform — this replaces the old macOS-only ``sips`` call so
+    the pipeline runs in a Linux container too.
     """
     try:
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "receipt.jpg"
-            subprocess.run(
-                [
-                    "sips", "-s", "format", "jpeg",
-                    "-Z", str(_SIPS_LONG_EDGE),
-                    str(path), "--out", str(out),
-                ],
-                check=True,
-                capture_output=True,
-            )
-            return out.read_bytes()
-    except FileNotFoundError as exc:  # non-macOS host without sips
+        with Image.open(path) as src:
+            im = ImageOps.exif_transpose(src)  # honor camera rotation before EXIF is dropped
+            im.thumbnail((_JPEG_LONG_EDGE, _JPEG_LONG_EDGE))  # downscale only, keep aspect
+            if im.mode != "RGB":
+                im = im.convert("RGB")  # JPEG has no alpha/palette channel
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=85, optimize=True)
+            return buf.getvalue()
+    except UnidentifiedImageError as exc:  # e.g. HEIC when pillow-heif isn't installed
         raise RuntimeError(
-            f"Cannot read {path.name}: it needs conversion (HEIC/TIFF or oversized) and "
-            "`sips` is unavailable. Convert it to JPEG/PNG first, or run on macOS."
+            f"Cannot read {path.name}: unsupported or unreadable image format. "
+            "HEIC/HEIF requires the `pillow-heif` package."
         ) from exc
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.decode(errors="ignore").strip()
-        raise RuntimeError(f"sips failed to convert {path.name}: {detail}") from exc
+    except OSError as exc:  # truncated/corrupt file or decode failure
+        raise RuntimeError(f"Failed to convert {path.name}: {exc}") from exc
 
 
 def image_block(path: Path) -> dict[str, Any]:
@@ -136,7 +143,7 @@ def image_block(path: Path) -> dict[str, Any]:
     if media is not None and path.stat().st_size <= _MAX_DIRECT_BYTES:
         data = path.read_bytes()
     else:
-        data = _sips_to_jpeg(path)
+        data = _convert_to_jpeg(path)
         media = "image/jpeg"
     b64 = base64.standard_b64encode(data).decode("ascii")
     return {"type": "image", "source": {"type": "base64", "media_type": media, "data": b64}}
