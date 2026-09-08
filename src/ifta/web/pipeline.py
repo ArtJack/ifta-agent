@@ -75,7 +75,12 @@ def process_submission(
     ret = computed.ret
     findings = computed.findings
 
-    write_portal_csv(ret, out_dir / "ifta_portal.csv", portal="generic")
+    write_portal_csv(
+        ret,
+        out_dir / "ifta_portal.csv",
+        portal="generic",
+        block_reasons=computed.block_reasons,
+    )
 
     per_truck_lines = compute_per_truck_lines(data, ret, rates_table)
     write_per_truck_filings(

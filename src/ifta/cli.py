@@ -142,7 +142,12 @@ def run(
         console.print("  no issues found")
 
     console.print("\n[bold]5. Writing outputs…")
-    portal_csv = write_portal_csv(ret, out_dir / "ifta_portal.csv", portal=portal_name)
+    portal_csv = write_portal_csv(
+        ret,
+        out_dir / "ifta_portal.csv",
+        portal=portal_name,
+        block_reasons=computed.block_reasons,
+    )
     console.print(f"  ✓ {_display_path(portal_csv)}")
     per_truck_lines = compute_per_truck_lines(data, ret, rates)
     truck_paths = write_per_truck_filings(
@@ -515,7 +520,12 @@ def deliver(
 
     # --- 2. Always write the portal CSV; the owner-review xlsx is written
     # AFTER the agent runs so it can embed the agent's findings + metrics.
-    portal_csv = write_portal_csv(ret, out_dir / "ifta_portal.csv", portal=portal_name)
+    portal_csv = write_portal_csv(
+        ret,
+        out_dir / "ifta_portal.csv",
+        portal=portal_name,
+        block_reasons=computed.block_reasons,
+    )
     diagnostic_paths: list[Path] = []
     if diagnostics:
         miles_csv, fuel_csv = write_cleaned_csvs(data, out_dir)

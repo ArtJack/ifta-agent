@@ -242,7 +242,10 @@ def _special_jurisdiction_reminders(
         by_code[finding.code].append(finding)
 
     reminders: list[dict[str, Any]] = []
-    for code in ("OREGON_WMT", "SURCHARGE_INCLUDED", "SURCHARGE_MISSING", "NON_IFTA_MILES"):
+    # SURCHARGE_MISSING is deliberately absent: it is a blocking error now, so it
+    # already appears in the packet's blocking reasons. Repeating it here as a
+    # "reminder" would present a filing blocker as a gentle note to the reviewer.
+    for code in ("OREGON_WMT", "SURCHARGE_INCLUDED", "NON_IFTA_MILES"):
         for finding in by_code.get(code, []):
             reminders.append(_finding_dict(finding))
 

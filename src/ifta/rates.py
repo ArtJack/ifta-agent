@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,11 @@ import requests
 
 CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "rates"
 BASE_URL = "https://www.iftach.org/taxmatrix/charts"
+
+# A rate fallback is an operational event the worker and journal must record:
+# it means a filing was priced from a prior quarter. print() went to a stdout
+# nobody reads in production.
+log = logging.getLogger("ifta.rates")
 
 
 # Map IFTA jurisdiction names → 2-letter postal codes.
@@ -148,14 +154,23 @@ def _quarter_url(quarter: str) -> tuple[str, str]:
     return f"{BASE_URL}/{q}Q{y}.csv", f"{q}Q{y}"
 
 
-def _strip_money(s: str) -> float:
+def _strip_money(s: str) -> float | None:
+    """Parse one rate cell. Returns None when the cell cannot be read.
+
+    "No rate" and "we could not read the rate" are different facts and must not
+    share a representation. An empty or dashed cell is a real zero (Oregon
+    charges a weight-mile tax instead; Indiana publishes no diesel surcharge).
+    Anything else that will not parse is *unknown* — and returning 0.0 for it
+    meant a jurisdiction quietly dropped out of the matrix and every mile driven
+    there computed $0.00 of tax on a government filing.
+    """
     s = s.replace("$", "").replace(",", "").strip()
     if s in ("", "-", "—"):
         return 0.0
     try:
         return float(s)
     except ValueError:
-        return 0.0
+        return None
 
 
 SURCHARGE_PATTERN = re.compile(r"\bsur\s*chg\b|\bsurcharge\b", re.IGNORECASE)
@@ -193,6 +208,11 @@ class RateMatrixInvalidError(Exception):
 # compute $0 tax for the missing jurisdictions.
 _MIN_PLAUSIBLE_JURISDICTIONS = 50
 
+# The diesel column. A row too short to reach *this* column is malformed; a row
+# too short to reach a later one simply means that jurisdiction doesn't publish
+# a rate for that alternative fuel.
+_CORE_FUEL_COL = 1
+
 
 def _is_404(exc: Exception) -> bool:
     return (
@@ -201,11 +221,26 @@ def _is_404(exc: Exception) -> bool:
     )
 
 
-def _parse_matrix(raw: str, fuel_col: int) -> tuple[dict[str, float], dict[str, float]]:
-    """Parse a rate-matrix CSV into (base_rates, surcharges)."""
+def _parse_matrix(
+    raw: str, fuel_col: int
+) -> tuple[dict[str, float], dict[str, float], list[str], int]:
+    """Parse a rate-matrix CSV into (base_rates, surcharges, unparseable, seen).
+
+    ``unparseable`` names the jurisdictions whose rate cell was present but
+    unreadable (or whose row was truncated). Those are the dangerous ones: they
+    are absent from ``rates``, which is indistinguishable from "not an IFTA
+    member" unless the caller is told. See :func:`_check_matrix`.
+
+    ``seen`` counts the distinct jurisdictions the file *describes*, whether or
+    not they tax this fuel. That, not the number of priced rows, is what says
+    "this is an IFTA matrix rather than an error page" — most jurisdictions
+    publish no hydrogen or electricity rate at all.
+    """
     reader = csv.reader(io.StringIO(raw))
     rates: dict[str, float] = {}
     surcharges: dict[str, float] = {}
+    unparseable: list[str] = []
+    seen: set[str] = set()
     pending_state: str | None = None
     pending_is_surcharge: bool = False
     for row in reader:
@@ -221,15 +256,59 @@ def _parse_matrix(raw: str, fuel_col: int) -> tuple[dict[str, float], dict[str, 
             continue
         if currency.upper() != "U.S.":
             continue
+        if not pending_is_surcharge:
+            seen.add(pending_state)
+        label = f"{pending_state} surcharge" if pending_is_surcharge else pending_state
         if len(row) <= 2 + fuel_col:
+            # A row too short to reach this fuel's column means the jurisdiction
+            # publishes nothing for it, which is ordinary for the alternative
+            # fuels. Only a row short of the *diesel* column is malformed.
+            if fuel_col > _CORE_FUEL_COL:
+                continue
+            unparseable.append(label)
             continue
         rate = _strip_money(row[2 + fuel_col])
+        if rate is None:
+            unparseable.append(label)
+            continue
         if rate > 0:
             if pending_is_surcharge:
                 surcharges[pending_state] = rate
             else:
                 rates[pending_state] = rate
-    return rates, surcharges
+    return rates, surcharges, unparseable, len(seen)
+
+
+def _check_matrix(
+    rates: dict[str, float], unparseable: list[str], seen: int, *, source: str
+) -> None:
+    """Raise unless a parsed matrix is fit to compute a tax filing from.
+
+    Applied to cached files as well as fresh downloads. ``cache_path.exists()``
+    short-circuits every later fetch, so a matrix that was poisoned once would
+    otherwise stay authoritative for the rest of the quarter.
+
+    The floor counts jurisdictions *described*, not jurisdictions priced for the
+    requested fuel. Counting priced rows made this a diesel-only check: propane
+    is taxed by 47 jurisdictions and hydrogen by about 13, so a >= 50 floor
+    rejected a perfectly valid matrix for most of the fifteen supported fuels.
+    """
+    if unparseable:
+        raise RateMatrixInvalidError(
+            f"{source} has unreadable rate cells for: {', '.join(unparseable)}. "
+            "Refusing to price a filing from a matrix with unknown rates — "
+            "re-fetch with `ifta rates --quarter <Q> --force`."
+        )
+    if seen < _MIN_PLAUSIBLE_JURISDICTIONS:
+        raise RateMatrixInvalidError(
+            f"{source} describes {seen} jurisdictions "
+            f"(expected >= {_MIN_PLAUSIBLE_JURISDICTIONS}) — refusing to use it. "
+            "A maintenance or WAF page parses like this."
+        )
+    if not rates:
+        raise RateMatrixInvalidError(
+            f"{source} priced no jurisdictions at all for this fuel — refusing to use it."
+        )
 
 
 def _download_matrix(url: str, dest: Path, fuel_col: int) -> None:
@@ -237,12 +316,8 @@ def _download_matrix(url: str, dest: Path, fuel_col: int) -> None:
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     raw = resp.content.decode("utf-8-sig", errors="replace")
-    rates, _ = _parse_matrix(raw, fuel_col)
-    if len(rates) < _MIN_PLAUSIBLE_JURISDICTIONS:
-        raise RateMatrixInvalidError(
-            f"{url} returned {len(rates)} priced jurisdictions "
-            f"(expected >= {_MIN_PLAUSIBLE_JURISDICTIONS}) — refusing to cache."
-        )
+    rates, _, unparseable, seen = _parse_matrix(raw, fuel_col)
+    _check_matrix(rates, unparseable, seen, source=url)
     dest.write_bytes(resp.content)
 
 
@@ -279,14 +354,14 @@ def fetch_rates(quarter: str, fuel: str = "diesel", *, force: bool = False) -> R
             for _ in range(3):
                 fb_path = CACHE_DIR / f"{fallback}.csv"
                 if fb_path.exists():
-                    print(f"  ⚠ {qkey} {reason} — falling back to cached {fallback}")
+                    log.warning("%s %s — falling back to cached %s", qkey, reason, fallback)
                     cache_path = fb_path
                     source_qkey = fallback
                     break
                 fb_url, _ = _quarter_url(fallback)
                 try:
                     _download_matrix(fb_url, fb_path, fuel_col)
-                    print(f"  ⚠ {qkey} {reason} — fetched {fallback} instead")
+                    log.warning("%s %s — fetched %s instead", qkey, reason, fallback)
                     cache_path = fb_path
                     source_qkey = fallback
                     break
@@ -304,7 +379,10 @@ def fetch_rates(quarter: str, fuel: str = "diesel", *, force: bool = False) -> R
         )
 
     raw = cache_path.read_text(encoding="utf-8-sig", errors="replace")
-    rates, surcharges = _parse_matrix(raw, fuel_col)
+    rates, surcharges, unparseable, seen = _parse_matrix(raw, fuel_col)
+    _check_matrix(
+        rates, unparseable, seen, source=f"{source_qkey} rate cache ({cache_path})"
+    )
     return RateTable(
         quarter=qkey,
         fuel=fuel,

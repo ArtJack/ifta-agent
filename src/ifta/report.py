@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -402,7 +403,13 @@ def _portal_fuel_label(fuel: str, portal: str) -> str:
     return {"diesel": "Diesel", "gasoline": "Gasoline"}.get(normalized_fuel, fuel.title())
 
 
-def write_portal_csv(ret: IftaReturn, out_path: Path, *, portal: str = "generic") -> Path:
+def write_portal_csv(
+    ret: IftaReturn,
+    out_path: Path,
+    *,
+    portal: str = "generic",
+    block_reasons: Sequence[str] | None = None,
+) -> Path:
     """IFTA Quarterly Return per-jurisdiction worksheet CSV.
 
     The column layout is a human-review worksheet inspired by the CDTFA
@@ -427,7 +434,17 @@ def write_portal_csv(ret: IftaReturn, out_path: Path, *, portal: str = "generic"
 
     with out_path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        if ret.rate_fallback_used:
+        # A worksheet for a return the gate blocks must say so on its own face.
+        # The email can be skimmed, forwarded or lost; this file is the thing that
+        # gets uploaded to a government portal, so the warning has to travel with
+        # it. Header rows only — the worksheet below is unchanged, so a reviewer
+        # who has resolved the blocker can still use it.
+        if block_reasons:
+            w.writerow(["DO_NOT_FILE", "Resolve the following before portal submission:"])
+            for reason in block_reasons:
+                w.writerow(["", reason])
+            w.writerow([])
+        elif ret.rate_fallback_used:
             w.writerow(["WARNING", ret.rate_warning or "Fallback rates were used."])
             w.writerow(
                 [
