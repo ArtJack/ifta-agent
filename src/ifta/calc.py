@@ -178,7 +178,7 @@ def compute_per_truck_lines(
                 )
             )
             # Surcharge line: only when this truck has miles in that state.
-            sur_rate = rates.surcharge(s) if hasattr(rates, "surcharge") else 0.0
+            sur_rate = rates.surcharge(s)
             if sur_rate > 0 and miles > 0:
                 sur_tax = _tax(float(taxable_gal), sur_rate)
                 lines.append(
@@ -262,7 +262,7 @@ def compute_return(data: CleanData, rates: RateTable) -> IftaReturn:
         )
         # Surcharge line (KY, VA): same taxable gallons, surcharge rate,
         # miles=0, no tax-paid credit (surcharge isn't paid at the pump).
-        sur_rate = rates.surcharge(s) if hasattr(rates, "surcharge") else 0.0
+        sur_rate = rates.surcharge(s)
         if sur_rate > 0:
             sur_tax = _tax(float(taxable_gal), sur_rate)
             lines.append(

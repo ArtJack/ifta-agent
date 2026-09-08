@@ -121,10 +121,14 @@ def validate(data: CleanData, ret: IftaReturn) -> list[Finding]:
         if ss not in surcharge_lines:
             findings.append(
                 Finding(
-                    "warning",
+                    # Error, not warning: the surcharge is a legally required
+                    # second line, so a return without it understates the tax
+                    # owed. A warning would let the gate return
+                    # READY_WITH_WARNINGS and the customer would file it.
+                    "error",
                     "SURCHARGE_MISSING",
                     f"{ss} requires a separate surcharge line on the IFTA return, "
-                    "but no surcharge line was computed.",
+                    "but no surcharge line was computed. Do not file until resolved.",
                     state=ss,
                 )
             )
@@ -170,9 +174,14 @@ def validate(data: CleanData, ret: IftaReturn) -> list[Finding]:
         if line.state not in non_ifta and line.state != "OR" and line.rate == 0 and line.miles > 0:
             findings.append(
                 Finding(
-                    "warning",
+                    # Error, not warning: with no rate the line computes $0.00
+                    # tax for miles actually driven there, so the return
+                    # understates what is owed. That is a wrong filing, not a
+                    # note to read afterwards.
+                    "error",
                     "RATE_MISSING",
-                    f"No tax rate loaded for {line.state} — check rate matrix.",
+                    f"No tax rate loaded for {line.state} — check rate matrix. "
+                    "Do not file until resolved.",
                     state=line.state,
                 )
             )
