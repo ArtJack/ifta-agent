@@ -352,3 +352,48 @@ def test_fallback_warning_goes_to_logger(tmp_path, monkeypatch, caplog, capsys) 
     assert table.fallback_used is True
     assert [r.name for r in caplog.records if "falling back to cached 2Q2026" in r.getMessage()]
     assert capsys.readouterr().out == "", "operational warnings belong in the log, not stdout"
+
+
+# --------------------------------------------------------------------------
+# The blocked return must not ship a clean, uploadable worksheet
+# --------------------------------------------------------------------------
+
+
+def test_blocked_return_marks_its_portal_csv(tmp_path) -> None:
+    """A packet that says "do not file" must not attach a file that says nothing.
+
+    The CSV already carried a DO_NOT_FILE banner for the rate-fallback case; the
+    new blocking conditions produced a clean worksheet, so a customer told to
+    hold could still upload the understated return. Same defect as the gate bug
+    itself, one artifact further along.
+    """
+    from ifta.report import write_portal_csv
+
+    data = _data([("T1", "CA", 1000), ("T1", "AZ", 500)], [("T1", "CA", 200)])
+    ret = compute_return(data, _table({"CA": 0.971}))
+    findings = validate(data, ret)
+    gate = determine_filing_status(ret, findings)
+    assert gate["status"] == "DO_NOT_FILE", "premise: this return is blocked"
+
+    out = write_portal_csv(
+        ret, tmp_path / "ifta_portal.csv", portal="generic", block_reasons=gate["reasons"]
+    )
+    head = out.read_text(encoding="utf-8").splitlines()
+    assert head[0].startswith("DO_NOT_FILE"), f"first line was {head[0]!r}"
+    assert any("RATE_MISSING" in line for line in head[:6])
+    assert "Jurisdiction" in "\n".join(head[:8]), "the worksheet itself must still be there"
+
+
+def test_clean_return_portal_csv_is_unchanged(tmp_path) -> None:
+    """No banner on a filing that is actually ready — it would train people to ignore it."""
+    from ifta.report import write_portal_csv
+
+    data = _data([("T1", "CA", 1000)], [("T1", "CA", 200)])
+    ret = compute_return(data, _table({"CA": 0.971}))
+    gate = determine_filing_status(ret, validate(data, ret))
+    assert gate["status"] == "READY_TO_FILE"
+
+    out = write_portal_csv(
+        ret, tmp_path / "ifta_portal.csv", portal="generic", block_reasons=gate["reasons"]
+    )
+    assert out.read_text(encoding="utf-8").splitlines()[0].startswith("Jurisdiction")

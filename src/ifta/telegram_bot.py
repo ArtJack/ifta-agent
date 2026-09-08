@@ -1083,6 +1083,7 @@ def run_delivery(submission: Submission, config: BotConfig) -> DeliveryResult:
     portal_csv = write_portal_csv(
         ret,
         out_dir / "ifta_portal.csv",
+        block_reasons=computed.block_reasons,
         portal=client_context.portal or "generic",
     )
     write_cleaned_csvs(data, out_dir)
