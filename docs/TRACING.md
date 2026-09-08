@@ -1,6 +1,6 @@
 # Agent Tracing
 
-The review agent is a multi-step tool-using loop (`tool_runner` over 16 tools). Tracing
+The review agent is a multi-step tool-using loop (`tool_runner` over 17 tools). Tracing
 makes that loop visible: every model turn, the tools it called (with inputs), per-turn
 tokens, and the final answer + filing status. It's the input to the next eval layer —
 span/trajectory evaluation over the agent's steps.

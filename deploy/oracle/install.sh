@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Bootstrap the IFTA stack on an Oracle Linux box (8 or 9).
+# Bootstrap the IFTA stack on the production box: an Oracle *Cloud* VM.
+#
+# The distro is Ubuntu 24.04, not Oracle Linux. That distinction cost this
+# script its whole purpose: it installed Docker with dnf, so on the machine it
+# is named after it could only ever work when Docker was already there. Both
+# families are handled below so the box is genuinely reproducible.
 #
 # Usage:   sudo bash deploy/oracle/install.sh              # install + start
 #          sudo bash deploy/oracle/install.sh uninstall    # stop + remove units
@@ -99,11 +104,36 @@ done
 
 # --- 1. docker --------------------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
-    say "installing Docker CE (Oracle Linux ships podman; the units drive docker compose)"
-    dnf -y install dnf-plugins-core
-    # Docker publishes no Oracle Linux repo; the CentOS build matches the RHEL base.
-    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-    dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    . /etc/os-release
+    if command -v apt-get >/dev/null 2>&1; then
+        say "installing Docker CE from Docker's apt repo (${PRETTY_NAME})"
+        # ID_LIKE covers Ubuntu derivatives; Docker publishes ubuntu/ and debian/.
+        docker_distro="ubuntu"
+        [[ "${ID}" == "debian" || "${ID_LIKE:-}" == *debian* && "${ID}" != "ubuntu" ]] && docker_distro="debian"
+        apt-get update -qq
+        apt-get -y install ca-certificates curl
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL "https://download.docker.com/linux/${docker_distro}/gpg" \
+            -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        # VERSION_CODENAME comes from os-release rather than being hardcoded, so a
+        # release upgrade does not silently point at the wrong suite.
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+https://download.docker.com/linux/${docker_distro} ${VERSION_CODENAME} stable" \
+            > /etc/apt/sources.list.d/docker.list
+        apt-get update -qq
+        apt-get -y install docker-ce docker-ce-cli containerd.io \
+            docker-buildx-plugin docker-compose-plugin
+    elif command -v dnf >/dev/null 2>&1; then
+        say "installing Docker CE from Docker's dnf repo (${PRETTY_NAME})"
+        dnf -y install dnf-plugins-core
+        # Docker publishes no Oracle Linux repo; the CentOS build matches the RHEL base.
+        dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+        dnf -y install docker-ce docker-ce-cli containerd.io \
+            docker-buildx-plugin docker-compose-plugin
+    else
+        die "no apt-get or dnf found — install Docker CE and the compose plugin by hand"
+    fi
 else
     ok "docker present: $(docker --version)"
 fi
@@ -134,6 +164,12 @@ if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" != "Disabled" ]];
     else
         warn "could not install policycoreutils-python-utils; relying on compose :Z labels only"
     fi
+else
+    # Ubuntu (the actual production box) uses AppArmor, where the compose `:Z`
+    # labels are inert. Access works because of the uid-10001 ownership set
+    # above — worth saying out loud, since the runbook's EACCES advice sends you
+    # to `getenforce` on a machine that has never had SELinux.
+    ok "no SELinux here (AppArmor) — :Z labels are no-ops; uid $CONTAINER_UID ownership is what grants access"
 fi
 ok "state directories ready (owner uid $CONTAINER_UID)"
 
@@ -146,6 +182,16 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
     else
         ok "firewalld: no inbound ports needed (tunnel is outbound-only)"
     fi
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    if ufw status 2>/dev/null | grep -qE '^(80|443|8000)(/tcp)?\s+ALLOW'; then
+        warn "ufw allows 80/443/8000 — the tunnel makes that unnecessary. Consider closing them."
+    else
+        ok "ufw: no inbound ports needed (tunnel is outbound-only)"
+    fi
+else
+    # Nothing to open either way: cloudflared dials out. Said explicitly because
+    # silence here previously read as "checked and fine".
+    ok "no host firewall active; none needed (the tunnel is outbound-only, no port is published)"
 fi
 
 # --- 4. systemd units -------------------------------------------------------

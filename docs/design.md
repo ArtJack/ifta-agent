@@ -11,7 +11,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
  customer ──upload──▶ artjeck.com/ifta  (Next.js on Vercel)
                             │  server-side proxy (hides backend key)
                             ▼
-              ifta-api.artjeck.com  (FastAPI, Cloudflare Tunnel → Mac mini)
+              ifta-api.artjeck.com  (FastAPI, Cloudflare Tunnel → Oracle Cloud VM)
                             │
         ┌───────────────────┼─────────────────────────┐
         ▼                   ▼                         ▼
@@ -45,11 +45,13 @@ multi-tenant web/Telegram intake and a layered eval harness.
    → tracing (observability) → span/trajectory eval (regression guardrail) → rubric + validated
    judge (advisory). A model never grades its own filing call.
 4. **Cost by risk tier.** Haiku/Sonnet for routine, Opus for high-risk, `--effort` for depth.
-5. **Cheap, real deployment — twice.** Mac mini + Cloudflare Tunnel (no public IP, no server
-   bill) + Vercel frontend, and an equivalent Azure footprint (Container Apps + managed
-   Postgres + Azure Files, Bicep IaC in `deploy/azure/`, runbook in [AZURE.md](AZURE.md)).
-   The backend is env-flagged: `IFTA_WEB_DB_URL` set ⇒ Postgres (Azure), unset ⇒ SQLite
-   (Mac mini). Either host can serve prod; teardown/rollback is documented both ways.
+5. **Cheap, real deployment — and portable enough to prove it.** Production is one
+   always-free Oracle Cloud VM behind a Cloudflare Tunnel (no public IP, no server bill)
+   with a Vercel frontend: compose + systemd, runbook in [ORACLE.md](ORACLE.md). The
+   backend is env-flagged — `IFTA_WEB_DB_URL` set ⇒ Postgres, unset ⇒ SQLite for local
+   work — which is what let the service move host twice (Mac mini → Azure Container Apps
+   → Oracle) without touching the pipeline. The Azure footprint is retired; its runbook
+   is kept as history in [archive/AZURE.md](archive/AZURE.md).
 
 ## 4. Data model (core)
 `MileageRow{ jurisdiction, miles }` · `FuelRow{ jurisdiction, gallons, date, tax_paid }` ·
@@ -61,7 +63,7 @@ multi-tenant web/Telegram intake and a layered eval harness.
 - **Integration** — full ingest→return pipeline; multi-tenant web flows.
 - **Regression** — assert fleet MPG/miles/total tax match real historical filings to the penny.
 - **Eval** — benchmark gate on extractor/agent accuracy vs. human-checked gold.
-- **429 tests** across 38 files.
+- **617 tests** across 49 files.
 
 ## 6. Risks & mitigations
 - *Rate-table staleness* → packet marked `REVIEW REQUIRED` if the quarter's rates are unavailable.

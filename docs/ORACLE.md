@@ -1,12 +1,21 @@
-# IFTA on the Oracle Linux box — migration + deployment runbook
+# IFTA on the Oracle Cloud box — deployment runbook
 
-The permanent home for the IFTA pipeline: one Oracle Linux server running the
-whole stack under Docker Compose, reached through a Cloudflare Tunnel, with
-nightly snapshots replicated to Cloudflare R2.
+The permanent home for the IFTA pipeline: one **Oracle Cloud** VM
+(`artjeck-oracle`, an always-free `VM.Standard.A1.Flex` running **Ubuntu
+24.04**) hosting the whole stack under Docker Compose, reached through a
+Cloudflare Tunnel, with nightly snapshots replicated to Cloudflare R2.
 
-This replaces the Azure Container Apps deployment (`docs/AZURE.md`), whose
-credit expires **2026-10-09**, and the Mac mini launchd deployment
-(`deploy/README.md`). Both remain documented as fallbacks.
+> **Oracle Cloud, not Oracle Linux.** The provider and the distro are different
+> things, and conflating them is not cosmetic: this runbook and `install.sh`
+> used to prescribe `dnf`, SELinux labelling and `firewalld`, none of which
+> exist on the box. The installer could only ever succeed where Docker was
+> already present. It now handles both families; the notes below say which
+> parts apply here.
+
+This replaced the Azure Container Apps deployment and the Mac mini launchd
+deployment. Both are gone — Azure was torn down in August 2026 (its runbook is
+kept as history in [archive/AZURE.md](archive/AZURE.md)) and the Mac's launchd
+agents are retired. **Neither is a fallback**; see **Rollback** below.
 
 > **Real customer PII.** `data/clients/`, `data/web_submissions/` and the
 > backup archives contain real carrier data. Keep the box's disk encrypted,
@@ -55,13 +64,13 @@ biggest reason to prefer the tunnel over a public IP plus Caddy.
 
 ## Prerequisites
 
-- Oracle Linux 8 or 9, root/sudo, outbound internet (no inbound needed).
+- Ubuntu 24.04 (or an RHEL-family host), root/sudo, outbound internet (no inbound needed).
 - The repo cloned on the box, e.g. `/opt/ifta-agent`.
 - A Cloudflare account holding `artjeck.com` (already the case).
 - Keys in hand: Anthropic, Resend, Turnstile secret, Telegram bot token.
 
 ```bash
-sudo apt-get -y install git      # dnf on Oracle Linux
+sudo apt-get -y install git      # dnf on RHEL-family hosts
 sudo install -d -o "$USER" -g "$USER" /opt/ifta-agent
 git clone git@github.com:ArtJack/ifta-agent /opt/ifta-agent
 ```
@@ -84,21 +93,26 @@ Everything below assumes `PROJECT=/opt/ifta-agent`.
 
 ## 1. Cloudflare Tunnel
 
-Create a **remotely-managed** tunnel — ingress lives in the dashboard, so there
-is no credentials file to place on the box.
+**What production actually does** (this differs from what an earlier draft of
+this runbook prescribed — the compose file is the authority, see the comment
+above the `cloudflared` service): the existing **locally-managed** `ifta-api`
+tunnel was *relocated* from the Mac mini rather than a new one being created.
+Same tunnel UUID, so the `ifta-api.artjeck.com` CNAME was never touched and
+there was no DNS cutover.
 
-1. Cloudflare **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel**
-   → type **Cloudflared** → name it `ifta-oracle`.
-2. Copy the **tunnel token** from the install command it shows. Do *not* run
-   that command; compose runs cloudflared for you.
-3. **Public Hostname** tab → **Add a public hostname**:
-   - Subdomain `ifta-api`, domain `artjeck.com`
-   - Service: **HTTP** → `web:8000`
-     (`web` is the compose service name — cloudflared resolves it on the
-     compose network, which is why no port is published to the host.)
+- Ingress lives on the box at `/etc/cloudflared/config.yml`, not in the
+  dashboard, and maps `ifta-api.artjeck.com` → `http://web:8000` (`web` is the
+  compose service name; cloudflared resolves it on the compose network, which is
+  why no port is published to the host).
+- The service runs only under the `tunnel` compose profile. Enable it by setting
+  `COMPOSE_PROFILES=tunnel` in `deploy/oracle/.env`, which the systemd unit
+  passes through. `CLOUDFLARE_TUNNEL_TOKEN` in `.env.example` is vestigial — no
+  compose service reads it.
 
-Leave the old Mac mini / Azure tunnel running for now; DNS still points there
-until step 6.
+For a **new** host, either move the tunnel the same way (copy
+`/etc/cloudflared/` and its credentials file) or create a remotely-managed
+tunnel in Zero Trust → Networks → Tunnels and point its Public Hostname at
+`http://web:8000`.
 
 ---
 
@@ -132,7 +146,7 @@ sudo $EDITOR deploy/oracle/.env
 
 Fill in every `REPLACE*` value. `deploy/oracle/.env.example` documents each
 one. The install script refuses to proceed while `POSTGRES_PASSWORD`,
-`ANTHROPIC_API_KEY`, `RESEND_API_KEY`, or `CLOUDFLARE_TUNNEL_TOKEN` is still a
+`ANTHROPIC_API_KEY`, or `RESEND_API_KEY` is still a
 placeholder.
 
 Leave `TELEGRAM_BOT_TOKEN` empty for now — the bot only starts under the
@@ -169,89 +183,18 @@ sudo bash install.sh doctor                              # full diagnostic
 
 ---
 
-## 5. Migrate the data
+## 5. Migrate the data — done
 
-Two things move: **carrier history** (the real asset) and **Telegram
-approvals**. Job state does *not* — see the note at the end of this section.
+The Mac-mini data move and the DNS cutover happened on 2026-08-14 and are not
+repeatable steps. Two facts from them are worth keeping:
 
-### From the Mac mini
+- Customer PII (`clients/`, `web_submissions/`, `traces/`, `state/`) lives under
+  `$IFTA_STATE_DIR` (`/var/lib/ifta`) and must be owned by uid **10001** — the
+  container's unprivileged `ifta` user — or every write fails.
+- There was **no DNS change**: the same tunnel UUID moved hosts, so the
+  `ifta-api.artjeck.com` CNAME still points where it always did.
 
-```bash
-# On the Mac mini
-cd ~/Desktop/AI/ifta-agent
-.venv/bin/ifta backup --dest /tmp/cutover --keep 3
-scp /tmp/cutover/ifta-data-*.tar.gz oracle-box:/tmp/
-```
-
-```bash
-# On the Oracle box
-cd /tmp && tar xzf ifta-data-*.tar.gz
-sudo systemctl stop ifta
-sudo rsync -a data/clients/            /var/lib/ifta/clients/
-sudo rsync -a data/web_submissions/    /var/lib/ifta/web_submissions/ 2>/dev/null || true
-sudo cp data/telegram_access.json      /var/lib/ifta/state/telegram_access.json
-sudo chown -R 10001:10001 /var/lib/ifta
-sudo restorecon -R /var/lib/ifta
-sudo systemctl start ifta
-```
-
-### From Azure
-
-```bash
-# Pull the Azure Files shares down (storage account name from the deployment outputs)
-az storage file download-batch --account-name <ACCT> -s clients -d ./clients
-az storage file download-batch --account-name <ACCT> -s state   -d ./state
-# then the same rsync/chown/restorecon block as above
-```
-
-Postgres-to-Postgres, if you want the Azure job rows too:
-
-```bash
-pg_dump --format=custom --no-owner --no-privileges \
-    "postgresql://USER:PASS@<azure-pg-fqdn>:5432/ifta?sslmode=require" -f azure.dump
-sudo docker compose cp azure.dump postgres:/tmp/azure.dump
-sudo docker compose exec postgres pg_restore -U ifta -d ifta --clean --if-exists /tmp/azure.dump
-```
-
-> **Job state is transient.** The `submissions` table is queue state, not
-> filing history — the carrier history the agent reads lives in
-> `data/clients/`. Starting fresh on the new box is normal and expected. Just
-> let in-flight work drain first: on the old host,
-> `SELECT status, COUNT(*) FROM submissions GROUP BY status` should show
-> nothing `QUEUED` or `RUNNING`.
-
-Confirm the box sees the history:
-
-```bash
-sudo docker compose exec web ifta clients   # lists carriers from data/clients
-```
-
----
-
-## 6. Cut over DNS
-
-Until now `ifta-api.artjeck.com` still resolves to the old host.
-
-1. Cloudflare **DNS** → delete (or rename) the old `ifta-api` CNAME pointing at
-   the Mac mini / Azure tunnel.
-2. The `ifta-oracle` tunnel's Public Hostname entry from step 1 creates the
-   replacement record automatically. Confirm `ifta-api` now points at
-   `<tunnel-uuid>.cfargotunnel.com`.
-
-```bash
-curl -fsS https://ifta-api.artjeck.com/healthz     # -> ok, served by the Oracle box
-```
-
-Vercel env vars stay unchanged — the hostname did not change, only what sits
-behind it. Then run the full end-to-end submit flow exactly as in
-[`deploy/README.md` step 6](../deploy/README.md): submit → confirmation email →
-click link → packet email with portal CSV and per-truck Excels.
-
-Tail the worker while you wait:
-
-```bash
-cd /opt/ifta-agent/deploy/oracle && sudo docker compose logs -f worker
-```
+To seed a *new* box, restore a snapshot instead — see **Restore drill** below.
 
 ---
 
@@ -265,7 +208,7 @@ sudo docker compose --profile telegram up -d
 sudo docker compose logs -f telegram-bot
 ```
 
-Stop the Mac mini's bot first — two pollers on one token fight over updates and
+Only one poller may hold the bot token — two fight over updates and
 each sees a random half of the messages.
 
 To make it start on boot with everything else, add `--profile telegram` to the
@@ -395,48 +338,37 @@ skipping it.
 
 ## Rollback
 
-The old deployments are untouched by this migration, so rollback is a DNS
-change:
+There is no other host to fall back to: the Mac mini deployment is retired and
+the Azure one is torn down. Rollback means going backwards on **this** box.
 
-1. Point `ifta-api.artjeck.com` back at the Mac mini tunnel (or the Azure
-   Container App).
-2. Restart the old host's services (`bash deploy/install.sh` on the Mac mini).
-3. Copy back anything the Oracle box accumulated in the meantime:
-   `/var/lib/ifta/clients` → the old host's `data/clients/`.
-
-Keep the Oracle stack running while you confirm — `sudo systemctl stop ifta`
-only once you are satisfied.
-
----
-
-## Decommissioning Azure
-
-Once the Oracle box has run a full quarter-end cleanly, and **after** verifying
-a restore drill works:
+**A bad deploy** — tag the running image before you build, because `update.sh`
+prunes dangling images at the end:
 
 ```bash
-# Final export of anything only Azure has
-az storage file download-batch --account-name <ACCT> -s clients -d ./azure-final-clients
-
-# Then, one command removes every Azure resource and stops all billing
-az group delete --name rg-ifta --yes --no-wait
+sudo docker tag ifta:latest ifta:pre-$(date +%F)      # BEFORE update.sh
+# then, to go back:
+sudo docker tag ifta:pre-<date> ifta:latest
+cd /opt/ifta-agent/deploy/oracle && sudo docker compose up -d --no-build
 ```
 
-`docs/AZURE.md` stays in the repo as the record of how it was built and as a
-migration-back path.
+Code: `git -C /opt/ifta-agent reset --hard <previous-sha>` (tag it first too).
+
+**Bad data** — stop the stack, restore the pre-deploy snapshot per the restore
+drill above, `chown -R 10001:10001`, start again. `update.sh` always takes a
+snapshot before it deploys, and refuses to continue if that fails.
 
 ---
 
 ## Troubleshooting
 
 **`EACCES` / permission denied writing to `/app/data/...`.** SELinux. The bind
-mounts need the `:Z` label (they have it in the compose file) *and* host
-ownership by uid 10001:
 
-```bash
-sudo chown -R 10001:10001 /var/lib/ifta && sudo restorecon -R /var/lib/ifta
-getenforce   # Enforcing is fine — do not disable it
-```
+On this box (Ubuntu/AppArmor) the compose `:Z` labels are **no-ops** — access
+works because `install.sh` chowns the state directories to uid 10001. If a
+container cannot write, check ownership first:
+`sudo ls -ln /var/lib/ifta` should show `10001 10001`. The SELinux advice below
+applies only to an RHEL-family host, where `getenforce` exists (Enforcing is
+fine — do not disable it; relabel with `restorecon -R /var/lib/ifta`).
 
 **`pg_dump: server version mismatch`.** `pg_dump` must be at least the server's
 version. The image pins `postgresql-client-16` and compose pins
@@ -479,4 +411,4 @@ cleared on their own.
 runs in its own container.
 
 **Telegram bot answers twice, or misses messages.** Two pollers on one token.
-Stop the Mac mini's bot.
+Make sure only one bot process holds the token (the compose `telegram-bot` service).
