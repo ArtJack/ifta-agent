@@ -69,3 +69,6 @@ logs/
 
 # Worktree directories created by Claude Code — not part of the project.
 .claude/worktrees/
+
+# Local AI tool config (aider), not part of the project.
+.aider.conf.yml
